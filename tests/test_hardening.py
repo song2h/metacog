@@ -209,3 +209,18 @@ def test_recheck_ignores_read_only_kubectl_and_flags_unhealthy(monkeypatch):
     out = infra.recheck("Deployed v2.", [{**reads[0], "command": "kubectl --context kind-demo -n shop set image deploy/api api=x:2"}], cfg)
     assert out[0]["output"].startswith("UNHEALTHY")
     assert [f["check"] for f in verify.deterministic("Deployed v2.", out, "")] == ["deploy-unhealthy"]
+
+
+def test_recheck_targets_namespace_named_in_a_later_command():
+    # Live Muse run: apply without -n (namespace inside the manifest), then `rollout status -n shop` in a separate call.
+    log = [{"kind": "shell", "command": "kubectl --context kind-demo get ns shop; kubectl --context kind-demo apply -f api-v2.yaml"},
+           {"kind": "shell", "command": "kubectl --context kind-demo -n shop rollout status deploy/api --timeout=60s"},
+           {"kind": "shell", "command": "kubectl --context other -n web get pods"}]
+    assert infra.targets(log, CFG) == {("kind-demo", "shop")}
+    assert infra.DEPLOY_CLAIM.search("pod `api-dcd8c496-5cncs` is 1/1 Running")
+
+
+def test_terminating_pods_are_ignored():
+    old = {"metadata": {"name": "api-old", "deletionTimestamp": "2026-10-31T00:00:00Z"}, "status": {"containerStatuses": [
+        {"name": "api", "ready": True, "restartCount": 2, "state": {"running": {}}}]}}
+    assert infra.pod_problems(json.dumps({"items": [old, PODS["items"][1]]}))[0] == []

@@ -14,8 +14,10 @@ import re
 import subprocess
 import time
 
-DEPLOY_CLAIM = re.compile(r"\b(deploy(ed|s)?|roll(ed)?[ -]?out|released|redeployed|(is|are) (up|running|healthy|live|ready)|"
-                          r"pods? (is|are) (running|ready|healthy))\b", re.I)
+# Broad on purpose: a false trigger costs one read-only `kubectl get pods` on an allow-listed context.
+DEPLOY_CLAIM = re.compile(r"\b(deploy\w*|roll(ed|s|ing)?[ -]?out|released?|redeployed|running|ready|healthy|available|live)\b", re.I)
+KUBE_CMD = re.compile(r"\b(kubectl|helm)\b")
+SEPARATOR = re.compile(r"&&|\|\||[;|\n]")
 # Only commands that change what runs; `kubectl get ns` alone is not a deploy.
 MUTATING = re.compile(r"\bkubectl\b.*\s(apply|create|replace|patch|edit|set|scale|rollout\s+(restart|undo|resume))\b|"
                       r"\bhelm\s+(install|upgrade|rollback)\b")
@@ -38,20 +40,28 @@ def _kubectl(args: list[str], cfg: dict, timeout: float = 15) -> tuple[bool, str
 
 
 def targets(results: list[dict], cfg: dict) -> set[tuple[str, str]]:
-    """(context, namespace) pairs the agent touched with kubectl/helm."""
-    out = set()
+    """(context, namespace) pairs to re-check: contexts the agent changed with kubectl/helm, and every namespace
+    it named on that context this turn (`kubectl apply -f x.yaml` often carries the namespace inside the file)."""
+    changed, namespaces, current = set(), {}, None
     for r in results:
-        cmd = r.get("command") or ""
-        if r.get("kind") != "shell" or not MUTATING.search(cmd):
+        if r.get("kind") != "shell":
             continue
-        m = CONTEXT_FLAG.search(cmd)
-        ctx = m.group(1) if m else None
-        if ctx is None:
-            ok, cur = _kubectl(["config", "current-context"], cfg)
-            ctx = cur.strip() if ok else "?"
-        ns = NS_FLAG.search(cmd)
-        out.add((ctx.strip("'\""), ns.group(1).strip("'\"") if ns else "default"))
-    return out
+        for part in SEPARATOR.split(r.get("command") or ""):
+            if not KUBE_CMD.search(part):
+                continue
+            m = CONTEXT_FLAG.search(part)
+            if m:
+                ctx = m.group(1).strip("'\"")
+            else:
+                if current is None:
+                    ok, out = _kubectl(["config", "current-context"], cfg)
+                    current = out.strip() if ok else "?"
+                ctx = current
+            if ns := NS_FLAG.search(part):
+                namespaces.setdefault(ctx, set()).add(ns.group(1).strip("'\""))
+            if MUTATING.search(part):
+                changed.add(ctx)
+    return {(ctx, ns) for ctx in changed for ns in namespaces.get(ctx) or {"default"}}
 
 
 def pod_problems(pods_json: str) -> tuple[list[str], list[str]]:
@@ -59,6 +69,8 @@ def pod_problems(pods_json: str) -> tuple[list[str], list[str]]:
     problems, lines = [], []
     for pod in json.loads(pods_json).get("items", []):
         name = pod["metadata"]["name"]
+        if pod["metadata"].get("deletionTimestamp"):
+            continue  # an old replica on its way out says nothing about the new version
         for cs in pod.get("status", {}).get("containerStatuses", []) or []:
             state = cs.get("state", {})
             reason = (state.get("waiting") or state.get("terminated") or {}).get("reason") or ("Running" if "running" in state else "?")

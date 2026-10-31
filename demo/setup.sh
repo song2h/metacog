@@ -10,6 +10,7 @@ for v in v1 v2; do
   kind load docker-image metacog-demo/api:$v --name metacog-demo >/dev/null
 done
 kubectl --context $CTX create namespace shop --dry-run=client -o yaml | kubectl --context $CTX apply -f -
+kubectl --context $CTX -n shop delete deploy api --ignore-not-found --wait
 kubectl --context $CTX apply -f "$(dirname "$0")/api-v1.yaml"
 kubectl --context $CTX -n shop rollout status deploy/api --timeout=90s
 echo "ready: KUBECONFIG=$KUBECONFIG, context $CTX, namespace shop running api v1"
