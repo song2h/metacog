@@ -13,7 +13,7 @@ exfiltration. The egress proxy (enforce mode) is the backstop for traffic hidden
 import re
 import shlex
 
-from metacog import llm
+from metacog import geo, llm
 
 SECRET_PATHS = re.compile(
     r"(~|\$HOME|/Users/[^/\s]+|/home/[^/\s]+)?/?\.(ssh|aws|gnupg|kube|docker)/|"
@@ -87,10 +87,27 @@ def _rm_root(cmd: str) -> bool:
     return False
 
 
+def _country_decision(text: str, cfg: dict, source: str) -> dict | None:
+    """Destinations in watched countries: deny when the country is blocked, otherwise flag."""
+    targets = hosts(text) + (geo.IP_LITERAL.findall(text) if NET_TOOLS.search(text) or re.search(r"\b(ssh|ping|git)\b", text) else [])
+    hits = {h: hit for h in targets if (hit := geo.host_country(h)) and hit[0] in geo.watched_countries(cfg)}
+    if not hits:
+        return None
+    blocked = {h: hit for h, hit in hits.items() if hit[0] in geo.blocked_countries(cfg)}
+    pick = blocked or hits
+    why = "; ".join(hit[1] for hit in pick.values())
+    if blocked:
+        return {"decision": "deny", "rule": "blocked-country", "hosts": list(blocked),
+                "reason": f"{source} contacts {', '.join(blocked)} ({why}). Change block_countries or METACOG_BLOCK_COUNTRIES to allow"}
+    return {"decision": "flag", "rule": "watched-country", "hosts": list(hits), "reason": f"{source} contacts {', '.join(hits)} ({why})"}
+
+
 def _network_decision(text: str, history: list[dict], cfg: dict, source: str) -> dict | None:
+    if (country := _country_decision(text, cfg, source)) and country["decision"] == "deny":
+        return country
     net = bool(NET_TOOLS.search(text))
     if not net:
-        return None
+        return country
     secret = bool(SECRET_PATHS.search(text))
     found = hosts(text)
     outside = [h for h in found if not allowed(h, cfg["allow_hosts"])]

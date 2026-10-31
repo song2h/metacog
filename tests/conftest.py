@@ -1,6 +1,6 @@
 import pytest
 
-from metacog import store
+from metacog import geo, store
 
 
 @pytest.fixture(autouse=True)
@@ -12,4 +12,6 @@ def isolated_home(tmp_path, monkeypatch):
     monkeypatch.setattr(store, "ENV_FILE", tmp_path / "no.env")
     monkeypatch.delenv("MODEL_API_KEY", raising=False)
     monkeypatch.delenv("META_API_KEY", raising=False)
+    monkeypatch.delenv("METACOG_BLOCK_COUNTRIES", raising=False)
+    monkeypatch.setattr(geo, "_ranges", None)
     return tmp_path

@@ -78,7 +78,20 @@ def cmd_init(a):
             f.write(f"MODEL_API_KEY={key}\n")
         os.environ["MODEL_API_KEY"] = key
         print(f"saved to {store.ENV_FILE} (mode 600)")
+    _ensure_geo(force=True)
     cmd_doctor(a)
+
+
+def _ensure_geo(force: bool = False) -> None:
+    """Fetch the APNIC ranges when country blocking or watching needs them. Never fatal."""
+    from metacog import geo
+    if geo.have_data() and not force or not geo.watched_countries(store.config()):
+        return
+    try:
+        print(f"metacog: downloading IP allocation data from APNIC ({geo.APNIC_URL})...", file=sys.stderr)
+        print(f"metacog: {geo.update()} IP ranges saved to {geo.data_path()}", file=sys.stderr)
+    except Exception as e:  # domain rules still work without it
+        print(f"metacog: could not fetch IP ranges ({e}); country checks use domain names only", file=sys.stderr)
 
 
 def cmd_doctor(a):
@@ -101,6 +114,10 @@ def cmd_doctor(a):
     for agent, binary in (("claude", "claude"), ("muse", "muse"), ("codex", "codex")):
         path = shutil.which(binary)
         print(f"  {agent:<10} {'found ' + path if path else 'not on PATH'}")
+    from metacog import geo
+    blocked, watched = geo.blocked_countries(store.config()), geo.watched_countries(store.config())
+    data = f"IP ranges from {time.strftime('%Y-%m-%d', time.localtime(geo.data_path().stat().st_mtime))}" if geo.have_data() else "no IP range data (run `metacog init`)"
+    print(f"  countries  block {','.join(sorted(blocked)) or 'none'}, watch {','.join(sorted(watched)) or 'none'}; {data}")
     print(f"  muse hooks {'installed' if _muse_installed() else 'not installed'} ({MUSE_SETTINGS})")
     print(f"  codex hooks {'installed' if CODEX_HOOKS.exists() and 'metacog hook' in CODEX_HOOKS.read_text() else 'not installed'}")
     sys.exit(0 if ok else 1)
@@ -158,6 +175,8 @@ def cmd_wrap(a):
         sys.exit(f"metacog: `{agent}` not found on PATH")
     run_id = time.strftime("%Y%m%d-%H%M%S") + f"-{agent}"
     env = dict(os.environ, METACOG_RUN=run_id)
+    if not a.no_egress:
+        _ensure_geo()
     upstream = next((os.environ[k] for k in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy") if os.environ.get(k)), None)
     if upstream and not a.no_egress:
         # shortcut: the recorder connects directly, so it would break an existing proxy chain; chain to it if users need both.
@@ -215,7 +234,10 @@ def _print_run_summary(since: float, run_id: str, no_egress: bool) -> None:
         lines.append(f"  session {p.stem[:8]}: {len(verdicts)} verified turns, {false} false claims, "
                      f"{len(guards)} guarded actions, trust {last.get('trust', '-')}")
     if not no_egress:
-        outside = [h for h in egress.summary(run_id) if not h["allowed"]]
+        seen = egress.summary(run_id)
+        for h in (h for h in seen if h.get("country")):
+            lines.append(f"  {'BLOCKED' if h['blocked'] else 'watched'} {h['host']} ({h['count']}): {h['why']}")
+        outside = [h for h in seen if not h["allowed"] and not h.get("country")]
         if outside:
             lines.append("  hosts outside allow list: " + ", ".join(f"{h['host']} ({h['count']})" for h in outside[:8]))
     if lines:

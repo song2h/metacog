@@ -7,12 +7,15 @@ only host and port are recorded. Programs that ignore proxy env vars are not see
 """
 
 import json
+import re
 import socket
 import socketserver
 import threading
 import time
 
-from metacog import guard, store
+from metacog import geo, guard, store
+
+IP_HOST = re.compile(r"[\d.]+|[0-9a-f:]+")
 
 
 def log_path(run_id: str):
@@ -55,19 +58,34 @@ class _Handler(socketserver.BaseRequestHandler):
         cfg = self.server.cfg
         allowed = guard.allowed(host, cfg["allow_hosts"])
         blocked = guard.allowed(host, cfg.get("block_hosts", [])) or (self.server.enforce and not allowed)
+        try:
+            ips = list(dict.fromkeys(a[4][0] for a in socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)))
+        except OSError:
+            ips = []
         rec = {"ts": time.time(), "host": host, "port": port, "method": method, "allowed": allowed, "blocked": blocked}
+        if (hit := geo.classify(host, ips)) and hit[0] in geo.watched_countries(cfg):
+            rec.update(country=hit[0], why=hit[1])
+            if hit[0] in self.server.block_countries:
+                rec["blocked"] = blocked = True
+        if IP_HOST.fullmatch(host):
+            rec["direct_ip"] = True
         with self.server.lock, log_path(self.server.run_id).open("a") as f:
             f.write(json.dumps(rec) + "\n")
         if blocked:
             s.sendall(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
             return
-        try:
-            up = socket.create_connection((host, port), timeout=15)
-            up.settimeout(None)
-            s.settimeout(None)
-        except OSError:
+        up = None
+        for ip in ips:  # only addresses that were checked, so DNS cannot point elsewhere after the check
+            try:
+                up = socket.create_connection((ip, port), timeout=15)
+                break
+            except OSError:
+                continue
+        if up is None:
             s.sendall(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n")
             return
+        up.settimeout(None)
+        s.settimeout(None)
         if method == "CONNECT":
             s.sendall(b"HTTP/1.1 200 Connection Established\r\n\r\n")
         else:
@@ -114,6 +132,7 @@ def start(run_id: str, enforce: bool = False) -> int:
     log_path(run_id).parent.mkdir(parents=True, exist_ok=True)
     srv = _Server(("127.0.0.1", 0), _Handler)
     srv.run_id, srv.cfg, srv.lock, srv.enforce = run_id, store.config(), threading.Lock(), enforce
+    srv.block_countries = geo.blocked_countries(srv.cfg)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     return srv.server_address[1]
 
@@ -124,6 +143,7 @@ def summary(run_id: str) -> list[dict]:
     if p.exists():
         for line in p.read_text().splitlines():
             r = json.loads(line)
-            h = hosts.setdefault(r["host"], {"host": r["host"], "count": 0, "allowed": r["allowed"], "blocked": r["blocked"]})
+            h = hosts.setdefault(r["host"], {"host": r["host"], "count": 0, "allowed": r["allowed"], "blocked": r["blocked"],
+                                             "country": r.get("country"), "why": r.get("why")})
             h["count"] += 1
     return sorted(hosts.values(), key=lambda h: (h["allowed"], -h["count"]))
