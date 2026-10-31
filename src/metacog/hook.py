@@ -5,13 +5,15 @@ Codex per its docs): JSON on stdin with session_id, hook_event_name, tool_name, 
 tool_response, last_assistant_message. Decisions go back as JSON on stdout.
 """
 
+import hashlib
 import json
+import os
 import re
 import sys
 import time
 import traceback
 
-from metacog import guard, optimize, store, verify
+from metacog import guard, llm, optimize, store, verify
 
 SHELL_TOOLS = {"bash", "shell", "exec_command", "local_shell", "run_shell_command", "terminal"}
 # Muse Code runs internal bookkeeping tools through the same hooks; they are not agent actions.
@@ -36,12 +38,12 @@ def _written(inp: dict) -> str:
     return "\n".join(p for p in parts if isinstance(p, str))
 
 
-def _path(inp: dict) -> str:
+def _paths(inp: dict) -> list[str]:
     p = inp.get("file_path") or inp.get("path") or inp.get("filename") or inp.get("notebook_path")
-    if not p:
-        m = re.search(r"\*\*\* (?:Add|Update|Delete) File: (\S+)", _written(inp))
-        p = m.group(1) if m else ""
-    return p if isinstance(p, str) else ""
+    if isinstance(p, str) and p:
+        return [p]
+    # apply_patch style edits (Codex, Muse) can touch several files in one call
+    return re.findall(r"\*\*\* (?:Add|Update|Delete) File: (\S+)", _written(inp))
 
 
 def _kind(tool: str, inp: dict) -> str:
@@ -92,7 +94,7 @@ def normalize(agent: str, ev: dict) -> dict | None:
         cmd = inp.get("command", "")
         rec.update(tool=tool, kind=_kind(tool, inp), tool_use_id=ev.get("tool_use_id"),
                    command=" ".join(cmd) if isinstance(cmd, list) else _text(cmd),
-                   path=_path(inp), content=clip(_written(inp)))
+                   path=(_paths(inp) or [""])[0], paths=_paths(inp), content=clip(_written(inp)))
         if event != "PreToolUse":
             ok, code, out = _result(event, ev)
             rec.update(ok=ok, exit_code=code, output=clip(out), output_len=len(out))
@@ -103,46 +105,109 @@ def normalize(agent: str, ev: dict) -> dict | None:
     return rec
 
 
+SECRET_TOKEN = re.compile(
+    r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)|"
+    r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b|\bgh[pousr]_[A-Za-z0-9]{30,}\b|\bgithub_pat_[A-Za-z0-9_]{40,}\b|"
+    r"\bsk-(?:ant-|proj-)?[A-Za-z0-9_-]{20,}|\bxox[abpr]-[A-Za-z0-9-]{10,}|\bLLM_[0-9]+_[A-Za-z0-9_-]{16,}|"
+    r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}")
+SECRET_ASSIGN = re.compile(
+    r"(?i)(?P<key>(?:api[_-]?key|secret[_-]?(?:access[_-]?)?key|client[_-]?secret|token|passw(?:or)?d|authorization)"
+    r"[\"']?\s*[:=]\s*(?:bearer\s+)?[\"']?)[^\s\"',;]{8,}")
+TEXT_FIELDS = ("command", "content", "output", "prompt", "message")
+
+
+def redact(text: str) -> str:
+    """Mask credentials before anything is stored or sent to the verifier."""
+    return SECRET_ASSIGN.sub(lambda m: m.group("key") + "[REDACTED]", SECRET_TOKEN.sub("[REDACTED]", text))
+
+
+def _first_time(key: str, window: float = 30) -> bool:
+    """True once per key within `window` seconds; dedupes the same hook installed twice (plugin + wrap)."""
+    d = store.HOME / "seen"
+    d.mkdir(parents=True, exist_ok=True)
+    f = d / hashlib.sha256(key.encode("utf-8", "backslashreplace")).hexdigest()[:32]
+    try:
+        os.close(os.open(f, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
+        return True
+    except FileExistsError:
+        if time.time() - f.stat().st_mtime > window:
+            f.touch()
+            return True
+        return False
+
+
+def _event_key(rec: dict) -> str:
+    detail = rec.get("tool_use_id") or rec.get("message") or rec.get("prompt") or rec.get("command") or ""
+    return f"{rec['session']}|{rec['event']}|{rec.get('stop_hook_active')}|{detail}"
+
+
+def _safe_append(sid: str, rec: dict) -> None:
+    try:
+        store.append(sid, rec)
+    except Exception:  # losing a log line must never change a guard decision
+        _log_error(rec.get("agent", "?"))
+
+
 def handle(agent: str, ev: dict) -> dict | None:
     """Record the event and return the JSON decision to print, if any."""
     rec = normalize(agent, ev)
-    if rec is None:
+    if rec is None or not _first_time(_event_key(rec)):
         return None
+    for k in TEXT_FIELDS:
+        if isinstance(rec.get(k), str):
+            rec[k] = redact(rec[k])
     sid = rec["session"]
     history = store.read(sid)
-    store.append(sid, rec)
 
     if rec["event"] == "PreToolUse":
-        decision = guard.check(rec, history, store.config())
+        cfg = store.config()
+        decision = guard.check(rec, history, cfg)
+        if decision and decision["rule"] in guard.GREY_RULES and cfg.get("judge_guard", True) and llm.api_key():
+            decision = guard.judge(rec, history, decision, cfg)
+        _safe_append(sid, rec)
         if decision:
-            store.append(sid, {"event": "Guard", "agent": agent, "session": sid, "tool_use_id": rec.get("tool_use_id"), **decision})
+            _safe_append(sid, {"event": "Guard", "agent": agent, "session": sid, "tool_use_id": rec.get("tool_use_id"), **decision})
             if decision["decision"] in ("deny", "ask"):
                 return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": decision["decision"],
                                                "permissionDecisionReason": f"metacog: {decision['reason']}"}}
         return None
 
+    if rec["event"] in ("PostToolUse", "PostToolUseFailure") and any(
+            r.get("event") == "Guard" and r.get("rule") == "secret-read" and r.get("tool_use_id") == rec.get("tool_use_id")
+            for r in history if rec.get("tool_use_id")):
+        rec["output"] = "[output withheld by metacog: this call read secret material]"
+    _safe_append(sid, rec)
+
     if rec["event"] == "Stop":
         turn = verify.current_turn(history)
         t0 = time.time()
-        result = verify.run(rec.get("message", ""), turn, rec.get("cwd", ""), store.config())
+        cfg = store.config()
+        result = verify.run(rec.get("message", ""), turn, rec.get("cwd", ""), cfg)
         result["waste"] = optimize.analyze(turn)
         blocks_so_far = sum(1 for r in turn if r.get("event") == "Verdict" and r.get("blocked"))
-        block = result["problems"] and blocks_so_far < store.config()["max_blocks_per_turn"]
-        store.append(sid, {"event": "Verdict", "agent": agent, "session": sid, "blocked": bool(block),
+        block = bool(result["problems"]) and blocks_so_far < cfg["max_blocks_per_turn"]
+        _safe_append(sid, {"event": "Verdict", "agent": agent, "session": sid, "blocked": block,
                            "latency_ms": int((time.time() - t0) * 1000), **result})
         if block:
             return {"decision": "block", "reason": verify.feedback(result)}
     return None
 
 
+def _log_error(agent: str) -> None:
+    try:
+        store.HOME.mkdir(parents=True, exist_ok=True)
+        with (store.HOME / "errors.log").open("a", encoding="utf-8", errors="backslashreplace") as f:
+            f.write(f"{time.ctime()} {agent}\n{traceback.format_exc()}\n")
+    except OSError:
+        pass
+
+
 def main(agent: str) -> None:
     try:
-        ev = json.load(sys.stdin)
+        ev = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
         out = handle(agent, ev)
         if out:
-            print(json.dumps(out, ensure_ascii=False))
+            sys.stdout.write(json.dumps(out) + "\n")
     except Exception:
         # Never break the agent because the supervisor failed; leave a trace instead.
-        store.HOME.mkdir(parents=True, exist_ok=True)
-        with (store.HOME / "errors.log").open("a") as f:
-            f.write(f"{time.ctime()} {agent}\n{traceback.format_exc()}\n")
+        _log_error(agent)

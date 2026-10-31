@@ -26,7 +26,7 @@ DEFAULT_CONFIG = {
 def config() -> dict:
     cfg = dict(DEFAULT_CONFIG)
     if CONFIG_FILE.exists():
-        cfg.update(json.loads(CONFIG_FILE.read_text()))
+        cfg.update(json.loads(CONFIG_FILE.read_text(encoding="utf-8")))
     return cfg
 
 
@@ -38,11 +38,21 @@ def session_path(sid: str) -> Path:
     return SESSIONS / f"{_safe(sid)}.jsonl"
 
 
+def _private_dir(d: Path) -> None:
+    d.mkdir(parents=True, exist_ok=True)
+    os.chmod(d, 0o700)  # logs hold prompts, commands and outputs
+
+
 def append(sid: str, rec: dict) -> dict:
     rec.setdefault("ts", time.time())
-    SESSIONS.mkdir(parents=True, exist_ok=True)
-    with session_path(sid).open("a") as f:
-        f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    _private_dir(SESSIONS)
+    # One write() of an ASCII-only line: no locale or lone-surrogate surprises, and concurrent hooks don't interleave.
+    line = (json.dumps(rec, ensure_ascii=True) + "\n").encode()
+    fd = os.open(session_path(sid), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+    try:
+        os.write(fd, line)
+    finally:
+        os.close(fd)
     return rec
 
 
@@ -51,7 +61,7 @@ def read(sid: str) -> list[dict]:
     if not p.exists():
         return []
     out = []
-    for line in p.read_text().splitlines():
+    for line in p.read_text(encoding="utf-8", errors="replace").splitlines():
         try:
             out.append(json.loads(line))
         except json.JSONDecodeError:
@@ -69,7 +79,7 @@ def load_env() -> None:
     """Read KEY=VALUE lines from ~/.config/metacog/.env without overriding the real environment."""
     if not ENV_FILE.exists():
         return
-    for line in ENV_FILE.read_text().splitlines():
+    for line in ENV_FILE.read_text(encoding="utf-8").splitlines():
         k, sep, v = line.strip().partition("=")
         if sep and not k.startswith("#"):
             os.environ.setdefault(k.strip(), v.strip().strip("'\""))

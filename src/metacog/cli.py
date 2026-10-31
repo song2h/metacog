@@ -6,6 +6,7 @@ import json
 import os
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -23,8 +24,10 @@ PLUGIN_SOURCE = "song2h/metacog"
 
 
 def hook_command(agent: str, portable: bool = False) -> str:
-    # wrap pins the current interpreter so hooks work even when the agent clears PATH (Muse does).
-    return f"metacog hook {agent}" if portable else f"{shlex.quote(sys.executable)} -m metacog hook {agent}"
+    if portable:
+        return f"metacog hook {agent}"
+    # wrap pins the interpreter and the log location: Muse runs hooks with a cleared environment.
+    return f"METACOG_HOME={shlex.quote(str(store.HOME))} {shlex.quote(sys.executable)} -m metacog hook {agent}"
 
 
 def hooks_config(agent: str, portable: bool = False) -> dict:
@@ -153,11 +156,17 @@ def cmd_wrap(a):
         sys.exit(f"metacog: `{agent}` not found on PATH")
     run_id = time.strftime("%Y%m%d-%H%M%S") + f"-{agent}"
     env = dict(os.environ, METACOG_RUN=run_id)
+    upstream = next((os.environ[k] for k in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy") if os.environ.get(k)), None)
+    if upstream and not a.no_egress:
+        # shortcut: the recorder connects directly, so it would break an existing proxy chain; chain to it if users need both.
+        print(f"metacog: HTTPS_PROXY is already set ({upstream}); egress map disabled for this run", file=sys.stderr)
+        a.no_egress = True
     if not a.no_egress:
-        proxy = f"http://127.0.0.1:{egress.start(run_id)}"
+        proxy = f"http://127.0.0.1:{egress.start(run_id, enforce=a.egress_enforce)}"
         for k in ("HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"):
             env[k] = proxy
-        env["NO_PROXY"] = env["no_proxy"] = "localhost,127.0.0.1,::1"
+        no_proxy = ",".join(filter(None, [os.environ.get("NO_PROXY") or os.environ.get("no_proxy"), "localhost,127.0.0.1,::1"]))
+        env["NO_PROXY"] = env["no_proxy"] = no_proxy
     if not a.no_dashboard:
         from metacog import dashboard
         url = dashboard.start_background(a.port)
@@ -177,11 +186,12 @@ def cmd_wrap(a):
         cmd = [binary, *args]
 
     started = time.time()
+    # Ctrl-C goes to the whole foreground process group; let the agent handle it and shut down cleanly.
+    previous = signal.signal(signal.SIGINT, signal.SIG_IGN)
     try:
-        code = subprocess.call(cmd, env=env)
-    except KeyboardInterrupt:
-        code = 130
+        code = subprocess.Popen(cmd, env=env, preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL)).wait()
     finally:
+        signal.signal(signal.SIGINT, previous)
         if cleanup:
             os.unlink(cleanup)
     _print_run_summary(started, run_id, a.no_egress)
@@ -252,6 +262,7 @@ def main(argv=None):
     s.add_argument("--port", type=int, default=8977, help="dashboard port")
     s.add_argument("--no-dashboard", action="store_true")
     s.add_argument("--no-egress", action="store_true", help="do not route agent traffic through the egress recorder")
+    s.add_argument("--egress-enforce", action="store_true", help="refuse connections to hosts that are not on the allow list")
     s.add_argument("args", nargs=argparse.REMAINDER, help="arguments passed to the agent")
     s.set_defaults(fn=cmd_wrap)
 

@@ -35,6 +35,7 @@ def _pipe(src: socket.socket, dst: socket.socket) -> None:
 class _Handler(socketserver.BaseRequestHandler):
     def handle(self):
         s = self.request
+        s.settimeout(30)
         head = b""
         while b"\r\n\r\n" not in head and len(head) < 65536:
             chunk = s.recv(4096)
@@ -46,32 +47,35 @@ class _Handler(socketserver.BaseRequestHandler):
             method, target, _ = line.split(" ", 2)
         except ValueError:
             return
-        if method == "CONNECT":
-            host, _, port = target.rpartition(":")
-        else:
-            rest = target.split("://", 1)[-1].split("/", 1)[0]
-            host, _, port = rest.partition(":")
-            port = port or "80"
-        host = host.strip("[]").lower()
+        authority = target if method == "CONNECT" else target.split("://", 1)[-1].split("/", 1)[0]
+        host, port = split_authority(authority, 443 if method == "CONNECT" else 80)
+        if not host or port is None:
+            s.sendall(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n")
+            return
         cfg = self.server.cfg
-        blocked = guard.allowed(host, cfg.get("block_hosts", []))
-        rec = {"ts": time.time(), "host": host, "port": int(port or 443), "method": method,
-               "allowed": guard.allowed(host, cfg["allow_hosts"]), "blocked": blocked}
+        allowed = guard.allowed(host, cfg["allow_hosts"])
+        blocked = guard.allowed(host, cfg.get("block_hosts", [])) or (self.server.enforce and not allowed)
+        rec = {"ts": time.time(), "host": host, "port": port, "method": method, "allowed": allowed, "blocked": blocked}
         with self.server.lock, log_path(self.server.run_id).open("a") as f:
             f.write(json.dumps(rec) + "\n")
         if blocked:
             s.sendall(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
             return
         try:
-            up = socket.create_connection((host, int(port or 443)), timeout=15)
+            up = socket.create_connection((host, port), timeout=15)
             up.settimeout(None)
+            s.settimeout(None)
         except OSError:
             s.sendall(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n")
             return
         if method == "CONNECT":
             s.sendall(b"HTTP/1.1 200 Connection Established\r\n\r\n")
         else:
-            up.sendall(head)
+            # One request per connection: clients pool proxy connections across hosts, so a kept-alive
+            # tunnel to the first origin would carry later requests meant for other hosts.
+            first, _, rest = head.partition(b"\r\n")
+            kept = [h for h in rest.split(b"\r\n") if not h.lower().startswith((b"connection:", b"proxy-connection:", b"keep-alive:"))]
+            up.sendall(first + b"\r\nConnection: close\r\n" + b"\r\n".join(kept))
         t = threading.Thread(target=_pipe, args=(up, s), daemon=True)
         t.start()
         _pipe(s, up)
@@ -79,16 +83,37 @@ class _Handler(socketserver.BaseRequestHandler):
         up.close()
 
 
+def split_authority(authority: str, default_port: int) -> tuple[str, int | None]:
+    """'host:port', '[v6]:port' or 'host' -> (host, port); port None when it is not a valid number."""
+    if authority.startswith("["):
+        host, _, rest = authority[1:].partition("]")
+        port = rest[1:] if rest.startswith(":") else ""
+    elif authority.count(":") == 1:
+        host, _, port = authority.partition(":")
+    else:
+        host, port = authority, ""
+    if not port:
+        return host.lower(), default_port
+    return host.lower(), int(port) if port.isdigit() and 0 < int(port) < 65536 else None
+
+
 class _Server(socketserver.ThreadingTCPServer):
     daemon_threads = True
     allow_reuse_address = True
 
+    def handle_error(self, request, client_address):
+        pass  # resets and timeouts are normal for a proxy; never print over the agent's terminal
 
-def start(run_id: str) -> int:
-    """Start the proxy on a free localhost port in a background thread; return the port."""
+
+def start(run_id: str, enforce: bool = False) -> int:
+    """Start the proxy on a free localhost port in a background thread; return the port.
+
+    enforce=True refuses every host that is not on the allow list (403), which also stops
+    uploads hidden inside scripts that the command guard never sees.
+    """
     log_path(run_id).parent.mkdir(parents=True, exist_ok=True)
     srv = _Server(("127.0.0.1", 0), _Handler)
-    srv.run_id, srv.cfg, srv.lock = run_id, store.config(), threading.Lock()
+    srv.run_id, srv.cfg, srv.lock, srv.enforce = run_id, store.config(), threading.Lock(), enforce
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     return srv.server_address[1]
 

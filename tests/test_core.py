@@ -95,6 +95,7 @@ def test_claim_without_test_run_and_skip_tampering():
     f = verify.deterministic("Done, tests pass.", [post("", kind="write", tool="Edit", path="tests/test_a.py",
                                                          content="@pytest.mark.skip\ndef test_a(): ...")], "")
     assert {x["check"] for x in f} == {"tests-not-run", "test-tampering"}
+    assert all(x["severity"] != "false" for x in f)  # evidence for the model, not a block on its own
 
 
 def test_honest_report_has_no_findings(tmp_path):
@@ -112,7 +113,8 @@ def test_current_turn_and_score():
     hist = [{"event": "UserPromptSubmit"}, {"event": "Stop"}, {"event": "UserPromptSubmit", "prompt": "2"}, {"event": "PostToolUse"}]
     assert verify.current_turn(hist)[0].get("prompt") == "2"
     assert verify.trust_score([{"verdict": "verified"}, {"verdict": "false"}], []) == 50
-    assert verify.trust_score([], []) is None
+    assert verify.trust_score([{"verdict": "verified"}, {"verdict": "unverifiable"}], []) == 100
+    assert verify.trust_score([{"verdict": "unverifiable"}], []) is None
 
 
 # ── optimize ──
@@ -126,7 +128,6 @@ def test_waste_patterns():
 # ── end to end through handle(), no network ──
 
 def test_handle_blocks_false_report(tmp_path, monkeypatch):
-    monkeypatch.setattr(store, "SESSIONS", tmp_path)
     seen = {}
 
     def fake_judge(model, system, user, schema):
@@ -146,7 +147,6 @@ def test_handle_blocks_false_report(tmp_path, monkeypatch):
 
 
 def test_offline_claim_regex_never_blocks(tmp_path, monkeypatch):
-    monkeypatch.setattr(store, "SESSIONS", tmp_path)
     monkeypatch.setattr(verify.llm, "chat_json", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("offline")))
     ev = lambda **kw: {"session_id": "off", "cwd": str(tmp_path), **kw}
     hook.handle("claude", ev(hook_event_name="PostToolUseFailure", tool_name="Bash", tool_input={"command": "pytest"}, error="Exit code 1"))

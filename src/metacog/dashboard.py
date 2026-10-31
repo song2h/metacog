@@ -45,6 +45,10 @@ class _Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
+        # A page on another origin can rebind its DNS name to 127.0.0.1; only answer requests addressed to us.
+        host = (self.headers.get("Host") or "").rsplit(":", 1)[0]
+        if host not in ("127.0.0.1", "localhost", "[::1]"):
+            return self._send(b"{}", code=403)
         path = self.path.split("?", 1)[0]
         if path == "/":
             return self._send(files("metacog").joinpath("dashboard.html").read_bytes(), "text/html; charset=utf-8")
@@ -57,8 +61,15 @@ class _Handler(BaseHTTPRequestHandler):
         self._send(b"{}", code=404)
 
 
+class _Server(ThreadingHTTPServer):
+    daemon_threads = True
+
+    def handle_error(self, request, client_address):
+        pass  # closed browser tabs etc. must not print over the agent's terminal
+
+
 def _bind(port: int) -> ThreadingHTTPServer:
-    return ThreadingHTTPServer(("127.0.0.1", port), _Handler)
+    return _Server(("127.0.0.1", port), _Handler)
 
 
 def serve(port: int) -> None:

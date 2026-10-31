@@ -15,7 +15,7 @@ def api_key() -> str | None:
     return os.environ.get("MODEL_API_KEY") or os.environ.get("META_API_KEY")
 
 
-def chat_json(model: str, system: str, user: str, schema: dict, timeout: float = 90) -> tuple[dict, dict]:
+def chat_json(model: str, system: str, user: str, schema: dict, timeout: float = 30) -> tuple[dict, dict]:
     """Return (parsed JSON content, usage). Raises RuntimeError on API or parse failure."""
     key = api_key()
     if not key:
