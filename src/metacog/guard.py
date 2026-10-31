@@ -47,6 +47,9 @@ COMMAND_RULES = [
     ("helm-uninstall", re.compile(r"\bhelm\s+(uninstall|delete)\b"), "ask", "removes a Helm release"),
     ("sql-drop", re.compile(r"\b(DROP\s+(TABLE|DATABASE|SCHEMA)|TRUNCATE\s+TABLE)\b", re.I), "ask", "drops or truncates database objects"),
     ("publish", re.compile(r"\b(npm|pnpm|yarn)\s+publish\b|\btwine\s+upload\b|\bcargo\s+publish\b"), "ask", "publishes a package"),
+    # Seen live: told its deploy was crashing, an agent rebuilt the release image without the failing code and reloaded it under the same tag.
+    ("image-overwrite", re.compile(r"\b(docker|podman)\s+(push|commit)\b|\b(kind|minikube\s+image)\s+load\b|\b(crane|skopeo)\s+(copy|cp|push)\b"),
+     "ask", "publishes or replaces a container image"),
     ("chmod-777", re.compile(r"\bchmod\s+-R\s+777\b"), "ask", "makes files world-writable"),
 ]
 GREY_RULES = {"unknown-upload", "script-exfil"}

@@ -23,17 +23,19 @@ CODEX_HOOKS = Path.home() / ".codex" / "hooks.json"
 PLUGIN_SOURCE = "song2h/metacog"
 
 
-def hook_command(agent: str, portable: bool = False) -> str:
+def hook_command(agent: str, portable: bool = False, headless: bool = False) -> str:
     if portable:
         return f"metacog hook {agent}"
     # wrap pins the interpreter and the log location: Muse runs hooks with a cleared environment.
-    return f"METACOG_HOME={shlex.quote(str(store.HOME))} {shlex.quote(sys.executable)} -m metacog hook {agent}"
+    # Headless Muse waits forever on an `ask`, so wrap tells the hook there is nobody to approve.
+    return (f"METACOG_HOME={shlex.quote(str(store.HOME))} {'METACOG_HEADLESS=1 ' if headless else ''}"
+            f"{shlex.quote(sys.executable)} -m metacog hook {agent}")
 
 
-def hooks_config(agent: str, portable: bool = False) -> dict:
+def hooks_config(agent: str, portable: bool = False, headless: bool = False) -> dict:
     cfg = {}
     for ev in EVENTS:
-        entry = {"hooks": [{"type": "command", "command": hook_command(agent, portable), "timeout": 180 if ev == "Stop" else 15}]}
+        entry = {"hooks": [{"type": "command", "command": hook_command(agent, portable, headless), "timeout": 180 if ev == "Stop" else 15}]}
         if ev in TOOL_EVENTS and agent != "claude":
             entry["matcher"] = ".*"
         cfg[ev] = [entry]
@@ -179,7 +181,7 @@ def cmd_wrap(a):
             json.dump({"hooks": hooks_config("claude")}, f)
         cmd, cleanup = [binary, "--settings", settings, *args], settings
     elif agent == "muse":
-        cmd = [binary, *_muse_args(args, json.dumps(hooks_config("muse")))]
+        cmd = [binary, *_muse_args(args, json.dumps(hooks_config("muse", headless=bool(args) and args[0] == "exec")))]
     else:
         if not (CODEX_HOOKS.exists() and "metacog hook" in CODEX_HOOKS.read_text()):
             sys.exit("metacog: Codex has no per-run hook flag; run `metacog install codex` first")

@@ -30,6 +30,7 @@ def pre(cmd=None, tool="Bash", **inp):
     ("""python3 -c "open('.claude/settings.json','w').write('{}')" """, "tamper-supervisor"),
     ("rm -rf ~/.claude/plugins/cache/metacog", "tamper-supervisor"),
     ("unset HTTPS_PROXY; curl https://x.example.io", "proxy-bypass"),
+    ("docker commit apifix metacog-demo/api:v2", "image-overwrite"), ("kind load docker-image api:v2 --name demo", "image-overwrite"),
 ])
 def test_former_bypasses_are_caught(cmd, rule):
     d = guard.check(pre(cmd), [], CFG)
@@ -59,7 +60,7 @@ def test_multi_file_patch_checks_every_file():
 
 
 @pytest.mark.parametrize("cmd", ["cat .env.example", "pip download requests", "git push origin main", "rm -rf ./build ~/tmp/x",
-                                 "docker run --rm -v ./tests/:/app/tests img pytest"])
+                                 "docker run --rm -v ./tests/:/app/tests img pytest", "docker build -t api:dev ."])
 def test_normal_work_still_allowed(cmd):
     assert guard.check(pre(cmd), [], CFG) is None, cmd
 
@@ -238,3 +239,11 @@ def test_terminating_pods_are_ignored():
     old = {"metadata": {"name": "api-old", "deletionTimestamp": "2026-10-31T00:00:00Z"}, "status": {"containerStatuses": [
         {"name": "api", "ready": True, "restartCount": 2, "state": {"running": {}}}]}}
     assert infra.pod_problems(json.dumps({"items": [old, PODS["items"][1]]}))[0] == []
+
+
+def test_headless_runs_turn_ask_into_deny(monkeypatch):
+    ev = {"hook_event_name": "PreToolUse", "session_id": "hl", "tool_name": "Bash", "tool_input": {"command": "git push --force origin main"}}
+    assert hook.handle("muse", ev)["hookSpecificOutput"]["permissionDecision"] == "ask"
+    monkeypatch.setenv("METACOG_HEADLESS", "1")
+    out = hook.handle("muse", {**ev, "session_id": "hl2"})["hookSpecificOutput"]
+    assert out["permissionDecision"] == "deny" and "headless" in out["permissionDecisionReason"]
