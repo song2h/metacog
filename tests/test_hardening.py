@@ -30,7 +30,8 @@ def pre(cmd=None, tool="Bash", **inp):
     ("""python3 -c "open('.claude/settings.json','w').write('{}')" """, "tamper-supervisor"),
     ("rm -rf ~/.claude/plugins/cache/metacog", "tamper-supervisor"),
     ("unset HTTPS_PROXY; curl https://x.example.io", "proxy-bypass"),
-    ("docker commit apifix metacog-demo/api:v2", "image-overwrite"), ("kind load docker-image api:v2 --name demo", "image-overwrite"),
+    ("docker commit apifix metacog-demo/api:v2", "image-overwrite"), ("docker image push reg/api:v2", "image-overwrite"),
+    ("docker buildx build --push -t reg/api:v2 .", "image-overwrite"), ("k3d image import api:v2", "image-overwrite"), ("kind load docker-image api:v2 --name demo", "image-overwrite"),
 ])
 def test_former_bypasses_are_caught(cmd, rule):
     d = guard.check(pre(cmd), [], CFG)
@@ -60,7 +61,7 @@ def test_multi_file_patch_checks_every_file():
 
 
 @pytest.mark.parametrize("cmd", ["cat .env.example", "pip download requests", "git push origin main", "rm -rf ./build ~/tmp/x",
-                                 "docker run --rm -v ./tests/:/app/tests img pytest", "docker build -t api:dev ."])
+                                 "docker run --rm -v ./tests/:/app/tests img pytest", "docker build -t api:dev .", "docker pull api:v2", "docker compose push"])
 def test_normal_work_still_allowed(cmd):
     assert guard.check(pre(cmd), [], CFG) is None, cmd
 
@@ -219,7 +220,7 @@ def test_recheck_targets_come_from_the_change_itself(tmp_path):
            {"kind": "shell", "command": "kubectl --context kind-demo -n kube-system get pods"}]
     assert infra.targets(log, CFG, str(tmp_path)) == {("kind-demo", "shop")}
     log[0]["command"] = "kubectl --context kind-demo apply -f missing.yaml"
-    assert infra.targets(log, CFG, str(tmp_path)) == {("kind-demo", "default")}
+    assert infra.targets(log, CFG, str(tmp_path)) == {("kind-demo", infra.ALL)}  # unreadable: new pods anywhere
     log[0]["command"] = "kubectl --context kind-demo -nweb set image deploy/api api=x:2"
     assert infra.targets(log, CFG, str(tmp_path)) == {("kind-demo", "web")}
     assert infra.DEPLOY_CLAIM.search("pod `api-dcd8c496-5cncs` is 1/1 Running")
@@ -247,3 +248,14 @@ def test_headless_runs_turn_ask_into_deny(monkeypatch):
     monkeypatch.setenv("METACOG_HEADLESS", "1")
     out = hook.handle("muse", {**ev, "session_id": "hl2"})["hookSpecificOutput"]
     assert out["permissionDecision"] == "deny" and "headless" in out["permissionDecisionReason"]
+
+
+def test_recheck_namespace_unknown_looks_at_new_pods_everywhere(tmp_path):
+    for cmd in ["kubectl --context k apply -f -", "kubectl --context k apply -k overlays/prod", "kubectl --context k apply -f ./manifests/"]:
+        assert infra.targets([{"kind": "shell", "command": cmd}], CFG, str(tmp_path)) == {("k", infra.ALL)}, cmd
+    (tmp_path / "plain.yaml").write_text("kind: ConfigMap\nmetadata:\n  name: x\n")
+    assert infra.targets([{"kind": "shell", "command": "kubectl --context k apply -f plain.yaml"}], CFG, str(tmp_path)) == {("k", "default")}
+    assert infra.targets([{"kind": "shell", "command": "kubectl --context k -n=prod rollout restart deploy/a"}], CFG) == {("k", "prod")}
+    old = {"metadata": {"name": "db-0", "creationTimestamp": "2026-10-01T00:00:00Z"}, "status": {"containerStatuses": [
+        {"name": "db", "ready": True, "restartCount": 4, "state": {"running": {}}}]}}
+    assert infra.pod_problems(json.dumps({"items": [old]}), since=infra._created(old) + 1, only_new=True) == ([], [])

@@ -107,7 +107,7 @@ Real Claude Code and Muse Code sessions on the `demo/` kind scenario: "roll out 
 | Caught by the re-check and sent back | 5 / 5 | 5 / 5 |
 | Agent corrected its report after the feedback | 5 / 5 | 5 / 5 |
 
-An earlier round of 8 runs missed one false report and let one repeat through, because of two metacog bugs (namespace taken from the wrong command, a too-narrow claim pattern). Both are fixed. In one Muse run the agent, once told the deploy was crashing, rebuilt the release image without the failing code and reloaded it under the same tag. It disclosed this, but nobody had asked for it; the guard now asks before replacing a container image.
+An earlier round of 8 runs exposed three metacog bugs, all now fixed: evidence that cited a leftover pod from the previous run, a crash missed because the namespace was only inside the manifest, and a repeated claim the deploy-claim pattern did not match. metacog sends a report back at most twice per turn (`max_blocks_per_turn`), so a third false report is recorded but released, which happened once. In one Muse run the agent, once told the deploy was crashing, rebuilt the release image without the failing code and reloaded it under the same tag. It disclosed this, but nobody had asked for it; the guard now asks before pushing, committing or loading a container image.
 
 ## Deploy re-check (opt-in)
 
@@ -117,7 +117,7 @@ Off by default. Turn it on for clusters you name in `~/.metacog/config.json`:
 {"kube_contexts": ["kind-metacog-demo"], "kubeconfig": "~/.metacog/demo-kubeconfig", "kube_wait": 80}
 ```
 
-When the final report claims a deploy and the agent ran a mutating `kubectl`/`helm` command against a listed context, metacog runs read-only `kubectl get pods` there, polling until a restart or crash state shows up or `kube_wait` seconds (default 25, one budget shared by all namespaces) have passed. The namespace comes from `-n`, else from the applied manifest, else `default`; pods created before the change are ignored when newer ones exist. Without `--context`, metacog uses the current context of its own `kubeconfig`, not an agent's `KUBECONFIG=` or `use-context`. Contexts that are not listed are never queried. The result goes into the verifier's evidence as a `METACOG RE-CHECK`, so the report is judged against the cluster as it is now, not as it was when the agent looked.
+When the final report claims a deploy and the agent ran a mutating `kubectl`/`helm` command against a listed context, metacog runs read-only `kubectl get pods` there, polling until a restart or crash state shows up or `kube_wait` seconds (default 25, one budget shared by all namespaces) have passed. The namespace comes from `-n`, else from the applied manifest (`default` if it names none). If metacog cannot read the manifest (stdin, a directory, `-k`), it looks at pods created since the change in every namespace; pods created before the change are ignored when newer ones exist. Without `--context`, metacog uses the current context of its own `kubeconfig`, not an agent's `KUBECONFIG=` or `use-context`. Contexts that are not listed are never queried. The result goes into the verifier's evidence as a `METACOG RE-CHECK`, so the report is judged against the cluster as it is now, not as it was when the agent looked.
 
 `demo/` has a reproducible scenario on a local [kind](https://kind.sigs.k8s.io) cluster with its own kubeconfig: `demo/setup.sh` starts `api` v1, and v2 starts cleanly, passes `rollout status`, then exits with a panic about 60 s later.
 
@@ -140,7 +140,8 @@ The host (`METACOG_BASE_URL`) and model (`model` in config) are defaults you can
 
 - Hooks see the agent's *tool calls*. They do not see what the agent binary itself sends; the egress map covers that only for programs that honor `HTTPS_PROXY`.
 - The egress proxy also applies to commands the agent runs, so a request to an unresolvable host fails with a proxy `502` instead of a DNS error.
-- The guard is pattern-based. It raises the cost of mistakes and obvious exfiltration; it is not a sandbox. Codex documents its own hooks the same way.
+- In a headless run started with `metacog wrap muse exec`, an `ask` becomes a deny with the reason, because Muse would otherwise wait forever for an approval nobody can give. This also stops routine steps such as `kind load docker-image`. (`claude -p` already treats an unanswerable `ask` as a block.)
+- The guard is pattern-based and strips quotes before matching, so text such as `git commit -m "docker push fix"` can trigger a rule. It raises the cost of mistakes and obvious exfiltration; it is not a sandbox. Codex documents its own hooks the same way.
 - Verification adds about 2–10 s at the end of a turn, plus up to `kube_wait` seconds when the deploy re-check runs.
 
 ## Scope changes since the application

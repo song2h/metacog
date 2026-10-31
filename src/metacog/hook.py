@@ -165,7 +165,7 @@ def handle(agent: str, ev: dict) -> dict | None:
         if decision and decision["rule"] in guard.GREY_RULES and cfg.get("judge_guard", True) and llm.api_key():
             decision = guard.judge(rec, history, decision, cfg)
         _safe_append(sid, rec)
-        if decision and decision["decision"] == "ask" and os.environ.get("METACOG_HEADLESS"):
+        if decision and decision["decision"] == "ask" and os.environ.get("METACOG_HEADLESS") == "1":
             decision = {**decision, "decision": "deny", "reason": decision["reason"] + " (needs a human's approval and this run is headless: ask the user instead)"}
         if decision:
             _safe_append(sid, {"event": "Guard", "agent": agent, "session": sid, "tool_use_id": rec.get("tool_use_id"), **decision})
