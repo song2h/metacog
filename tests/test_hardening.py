@@ -211,13 +211,27 @@ def test_recheck_ignores_read_only_kubectl_and_flags_unhealthy(monkeypatch):
     assert [f["check"] for f in verify.deterministic("Deployed v2.", out, "")] == ["deploy-unhealthy"]
 
 
-def test_recheck_targets_namespace_named_in_a_later_command():
-    # Live Muse run: apply without -n (namespace inside the manifest), then `rollout status -n shop` in a separate call.
+def test_recheck_targets_come_from_the_change_itself(tmp_path):
+    (tmp_path / "api-v2.yaml").write_text("kind: Deployment\nmetadata:\n  name: api\n  namespace: shop\n")
+    # Live Muse run: apply without -n, the namespace is inside the manifest. Read-only calls elsewhere do not count.
     log = [{"kind": "shell", "command": "kubectl --context kind-demo get ns shop; kubectl --context kind-demo apply -f api-v2.yaml"},
-           {"kind": "shell", "command": "kubectl --context kind-demo -n shop rollout status deploy/api --timeout=60s"},
-           {"kind": "shell", "command": "kubectl --context other -n web get pods"}]
-    assert infra.targets(log, CFG) == {("kind-demo", "shop")}
+           {"kind": "shell", "command": "kubectl --context kind-demo -n kube-system get pods"}]
+    assert infra.targets(log, CFG, str(tmp_path)) == {("kind-demo", "shop")}
+    log[0]["command"] = "kubectl --context kind-demo apply -f missing.yaml"
+    assert infra.targets(log, CFG, str(tmp_path)) == {("kind-demo", "default")}
+    log[0]["command"] = "kubectl --context kind-demo -nweb set image deploy/api api=x:2"
+    assert infra.targets(log, CFG, str(tmp_path)) == {("kind-demo", "web")}
     assert infra.DEPLOY_CLAIM.search("pod `api-dcd8c496-5cncs` is 1/1 Running")
+
+
+def test_old_restarts_of_untouched_pods_do_not_count():
+    old = {"metadata": {"name": "db-0", "creationTimestamp": "2026-10-01T00:00:00Z"}, "status": {"containerStatuses": [
+        {"name": "db", "ready": True, "restartCount": 4, "state": {"running": {}}}]}}
+    new = {"metadata": {"name": "api-2", "creationTimestamp": "2026-10-31T12:00:00Z"}, "status": {"containerStatuses": [
+        {"name": "api", "ready": True, "restartCount": 0, "state": {"running": {}}}]}}
+    since = infra._created(new) - 60
+    assert infra.pod_problems(json.dumps({"items": [old, new]}), since)[0] == []
+    assert infra.pod_problems(json.dumps({"items": [old, new]}))[0]  # without a change time, every pod counts
 
 
 def test_terminating_pods_are_ignored():

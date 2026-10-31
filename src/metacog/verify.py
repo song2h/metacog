@@ -192,7 +192,7 @@ def _valid(claims) -> list[dict]:
 
 def run(message: str, turn: list[dict], cwd: str, cfg: dict) -> dict:
     results = tool_results(turn)
-    results = results + infra.recheck(message, results, cfg)
+    results = results + infra.recheck(message, results, cfg, cwd)
     findings = deterministic(message, results, cwd)
     claims, usage, error, judged = [], {}, None, False
     if message.strip() and (results or ACTION_CLAIM.search(message)):

@@ -13,16 +13,19 @@ import os
 import re
 import subprocess
 import time
+from datetime import datetime
 
 # Broad on purpose: a false trigger costs one read-only `kubectl get pods` on an allow-listed context.
 DEPLOY_CLAIM = re.compile(r"\b(deploy\w*|roll(ed|s|ing)?[ -]?out|released?|redeployed|running|ready|healthy|available|live)\b", re.I)
 KUBE_CMD = re.compile(r"\b(kubectl|helm)\b")
+FILE_FLAG = re.compile(r"(?:\s-f|--filename)[= ]?(\S+)")
+MANIFEST_NS = re.compile(r"^\s*namespace:\s*['\"]?([\w.-]+)", re.M)
 SEPARATOR = re.compile(r"&&|\|\||[;|\n]")
 # Only commands that change what runs; `kubectl get ns` alone is not a deploy.
 MUTATING = re.compile(r"\bkubectl\b.*\s(apply|create|replace|patch|edit|set|scale|rollout\s+(restart|undo|resume))\b|"
                       r"\bhelm\s+(install|upgrade|rollback)\b")
 CONTEXT_FLAG = re.compile(r"--(?:kube-)?context[= ](\S+)")
-NS_FLAG = re.compile(r"(?:\s-n|--namespace)[= ](\S+)")
+NS_FLAG = re.compile(r"(?:\s-n\s*|--namespace[= ])(\S+)")
 BAD_REASONS = {"CrashLoopBackOff", "Error", "ImagePullBackOff", "ErrImagePull", "CreateContainerConfigError", "OOMKilled", "RunContainerError"}
 
 
@@ -39,38 +42,60 @@ def _kubectl(args: list[str], cfg: dict, timeout: float = 15) -> tuple[bool, str
     return p.returncode == 0, p.stdout if p.returncode == 0 else p.stderr
 
 
-def targets(results: list[dict], cfg: dict) -> set[tuple[str, str]]:
-    """(context, namespace) pairs to re-check: contexts the agent changed with kubectl/helm, and every namespace
-    it named on that context this turn (`kubectl apply -f x.yaml` often carries the namespace inside the file)."""
-    changed, namespaces, current = set(), {}, None
+def _manifest_namespaces(part: str, cwd: str) -> set[str]:
+    """Namespaces written inside the files a `kubectl apply -f` reads (local files only)."""
+    out = set()
+    for f in FILE_FLAG.findall(part):
+        path = os.path.join(cwd or ".", os.path.expanduser(f.strip("'\"")))
+        try:
+            with open(path, errors="replace") as fh:
+                out |= set(MANIFEST_NS.findall(fh.read(200_000)))
+        except OSError:
+            pass
+    return out
+
+
+def targets(results: list[dict], cfg: dict, cwd: str = "") -> set[tuple[str, str]]:
+    """(context, namespace) pairs the agent changed with kubectl/helm. The namespace comes from -n, else from the
+    applied manifest, else `default`. The context comes from --context, else metacog's view of the current context
+    (shortcut: an agent's own KUBECONFIG= or `config use-context` is not followed; the allow list still applies)."""
+    out, current = set(), None
     for r in results:
         if r.get("kind") != "shell":
             continue
         for part in SEPARATOR.split(r.get("command") or ""):
-            if not KUBE_CMD.search(part):
+            if not MUTATING.search(part):
                 continue
             m = CONTEXT_FLAG.search(part)
             if m:
                 ctx = m.group(1).strip("'\"")
             else:
                 if current is None:
-                    ok, out = _kubectl(["config", "current-context"], cfg)
-                    current = out.strip() if ok else "?"
+                    ok, res = _kubectl(["config", "current-context"], cfg)
+                    current = res.strip() if ok else "?"
                 ctx = current
-            if ns := NS_FLAG.search(part):
-                namespaces.setdefault(ctx, set()).add(ns.group(1).strip("'\""))
-            if MUTATING.search(part):
-                changed.add(ctx)
-    return {(ctx, ns) for ctx in changed for ns in namespaces.get(ctx) or {"default"}}
+            ns = NS_FLAG.search(part)
+            for n in ({ns.group(1).strip("'\"")} if ns else _manifest_namespaces(part, cwd) or {"default"}):
+                out.add((ctx, n))
+    return out
 
 
-def pod_problems(pods_json: str) -> tuple[list[str], list[str]]:
-    """(problem lines, all pod lines) from `kubectl get pods -o json`."""
+def _created(pod: dict) -> float:
+    try:
+        return datetime.fromisoformat(pod["metadata"]["creationTimestamp"].replace("Z", "+00:00")).timestamp()
+    except (KeyError, ValueError):
+        return 0.0
+
+
+def pod_problems(pods_json: str, since: float | None = None) -> tuple[list[str], list[str]]:
+    """(problem lines, all pod lines) from `kubectl get pods -o json`. With `since`, only pods created after it
+    count when there are any: old restarts of untouched pods say nothing about this deploy."""
+    pods = [p for p in json.loads(pods_json).get("items", []) if not p["metadata"].get("deletionTimestamp")]  # skip replicas on their way out
+    if since and (new := [p for p in pods if _created(p) >= since]):
+        pods = new
     problems, lines = [], []
-    for pod in json.loads(pods_json).get("items", []):
+    for pod in pods:
         name = pod["metadata"]["name"]
-        if pod["metadata"].get("deletionTimestamp"):
-            continue  # an old replica on its way out says nothing about the new version
         for cs in pod.get("status", {}).get("containerStatuses", []) or []:
             state = cs.get("state", {})
             reason = (state.get("waiting") or state.get("terminated") or {}).get("reason") or ("Running" if "running" in state else "?")
@@ -82,20 +107,22 @@ def pod_problems(pods_json: str) -> tuple[list[str], list[str]]:
     return problems, lines
 
 
-def recheck(message: str, results: list[dict], cfg: dict) -> list[dict]:
+def recheck(message: str, results: list[dict], cfg: dict, cwd: str = "") -> list[dict]:
     allowed = cfg.get("kube_contexts") or []
     if not allowed or not DEPLOY_CLAIM.search(message):
         return []
     entries = []
     deadline = time.time() + cfg.get("kube_wait", 25)
-    for ctx, ns in sorted(targets(results, cfg)):
+    changes = [r["ts"] for r in results if r.get("kind") == "shell" and r.get("ts") and MUTATING.search(r.get("command") or "")]
+    since = min(changes) - 5 if changes else None  # small slack for clock skew with the cluster
+    for ctx, ns in sorted(targets(results, cfg, cwd)):
         if ctx not in allowed:
             entries.append({"event": "Recheck", "tool": "metacog-recheck", "kind": "note", "ok": True,
                             "command": f"(skipped) context {ctx}", "output": "context is not on the kube_contexts allow list; not queried"})
             continue
         while True:
             ok, out = _kubectl(["--context", ctx, "-n", ns, "get", "pods", "-o", "json"], cfg)
-            problems, lines = pod_problems(out) if ok else ([], [])
+            problems, lines = pod_problems(out, since) if ok else ([], [])
             if not ok or problems or not lines or time.time() >= deadline:
                 break
             time.sleep(5)  # crashes often show up seconds after the agent saw "Running"
@@ -106,7 +133,7 @@ def recheck(message: str, results: list[dict], cfg: dict) -> list[dict]:
             continue
         if problems:
             output = ("UNHEALTHY now (checked by metacog after the agent stopped; restarts or a last exit mean the container "
-                      "crashed after the agent looked):\n" + "\n".join(problems))
+                      "has crashed since it started):\n" + "\n".join(problems))
         else:
             output = "healthy now:\n" + "\n".join(lines) if lines else "no pods"
         entries.append({"event": "Recheck", "tool": "metacog-recheck", "kind": "shell", "ok": not problems, "command": cmd, "output": output})
