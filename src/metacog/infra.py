@@ -16,7 +16,9 @@ import time
 
 DEPLOY_CLAIM = re.compile(r"\b(deploy(ed|s)?|roll(ed)?[ -]?out|released|redeployed|(is|are) (up|running|healthy|live|ready)|"
                           r"pods? (is|are) (running|ready|healthy))\b", re.I)
-KUBE_CMD = re.compile(r"\b(kubectl|helm)\b")
+# Only commands that change what runs; `kubectl get ns` alone is not a deploy.
+MUTATING = re.compile(r"\bkubectl\b.*\s(apply|create|replace|patch|edit|set|scale|rollout\s+(restart|undo|resume))\b|"
+                      r"\bhelm\s+(install|upgrade|rollback)\b")
 CONTEXT_FLAG = re.compile(r"--(?:kube-)?context[= ](\S+)")
 NS_FLAG = re.compile(r"(?:\s-n|--namespace)[= ](\S+)")
 BAD_REASONS = {"CrashLoopBackOff", "Error", "ImagePullBackOff", "ErrImagePull", "CreateContainerConfigError", "OOMKilled", "RunContainerError"}
@@ -24,6 +26,8 @@ BAD_REASONS = {"CrashLoopBackOff", "Error", "ImagePullBackOff", "ErrImagePull", 
 
 def _kubectl(args: list[str], cfg: dict, timeout: float = 15) -> tuple[bool, str]:
     env = dict(os.environ)
+    # Muse runs hooks with a cleared environment; look in the usual install locations too.
+    env["PATH"] = os.pathsep.join(filter(None, [env.get("PATH"), "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"]))
     if cfg.get("kubeconfig"):
         env["KUBECONFIG"] = os.path.expanduser(cfg["kubeconfig"])
     try:
@@ -38,7 +42,7 @@ def targets(results: list[dict], cfg: dict) -> set[tuple[str, str]]:
     out = set()
     for r in results:
         cmd = r.get("command") or ""
-        if r.get("kind") != "shell" or not KUBE_CMD.search(cmd):
+        if r.get("kind") != "shell" or not MUTATING.search(cmd):
             continue
         m = CONTEXT_FLAG.search(cmd)
         ctx = m.group(1) if m else None
@@ -71,18 +75,27 @@ def recheck(message: str, results: list[dict], cfg: dict) -> list[dict]:
     if not allowed or not DEPLOY_CLAIM.search(message):
         return []
     entries = []
+    deadline = time.time() + cfg.get("kube_wait", 25)
     for ctx, ns in sorted(targets(results, cfg)):
         if ctx not in allowed:
             entries.append({"event": "Recheck", "tool": "metacog-recheck", "kind": "note", "ok": True,
                             "command": f"(skipped) context {ctx}", "output": "context is not on the kube_contexts allow list; not queried"})
             continue
-        deadline = time.time() + cfg.get("kube_wait", 25)
         while True:
             ok, out = _kubectl(["--context", ctx, "-n", ns, "get", "pods", "-o", "json"], cfg)
-            problems, lines = pod_problems(out) if ok else ([f"kubectl failed: {out.strip()[:300]}"], [])
-            if problems or time.time() >= deadline:
+            problems, lines = pod_problems(out) if ok else ([], [])
+            if not ok or problems or not lines or time.time() >= deadline:
                 break
             time.sleep(5)  # crashes often show up seconds after the agent saw "Running"
-        entries.append({"event": "Recheck", "tool": "metacog-recheck", "kind": "shell", "ok": not problems,
-                        "command": f"kubectl --context {ctx} -n {ns} get pods", "output": "\n".join(problems or lines) or "no pods"})
+        cmd = f"kubectl --context {ctx} -n {ns} get pods"
+        if not ok:  # no evidence either way: a note, not a verdict
+            entries.append({"event": "Recheck", "tool": "metacog-recheck", "kind": "note", "ok": False, "command": cmd,
+                            "output": f"metacog could not query the cluster: {out.strip()[:300]}"})
+            continue
+        if problems:
+            output = ("UNHEALTHY now (checked by metacog after the agent stopped; restarts or a last exit mean the container "
+                      "crashed after the agent looked):\n" + "\n".join(problems))
+        else:
+            output = "healthy now:\n" + "\n".join(lines) if lines else "no pods"
+        entries.append({"event": "Recheck", "tool": "metacog-recheck", "kind": "shell", "ok": not problems, "command": cmd, "output": output})
     return entries

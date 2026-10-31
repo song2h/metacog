@@ -199,3 +199,13 @@ def test_dashboard_rejects_foreign_host_header():
         urllib.request.urlopen(req, timeout=5)
     assert e.value.code == 403
     srv.shutdown()
+
+
+def test_recheck_ignores_read_only_kubectl_and_flags_unhealthy(monkeypatch):
+    monkeypatch.setattr(infra, "_kubectl", lambda args, cfg, timeout=15: (True, json.dumps(PODS)))
+    reads = [{"event": "PostToolUse", "kind": "shell", "command": "kubectl --context kind-demo get ns shop", "ok": True}]
+    cfg = {**CFG, "kube_contexts": ["kind-demo"], "kube_wait": 0}
+    assert infra.recheck("Deployed v2.", reads, cfg) == []
+    out = infra.recheck("Deployed v2.", [{**reads[0], "command": "kubectl --context kind-demo -n shop set image deploy/api api=x:2"}], cfg)
+    assert out[0]["output"].startswith("UNHEALTHY")
+    assert [f["check"] for f in verify.deterministic("Deployed v2.", out, "")] == ["deploy-unhealthy"]
