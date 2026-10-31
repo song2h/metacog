@@ -1,0 +1,17 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "metacog",
+  "description": "Metacognition for coding agents",
+  "owner": {
+    "name": "song2h",
+    "url": "https://github.com/song2h"
+  },
+  "plugins": [
+    {
+      "name": "metacog",
+      "description": "Verify anything your agent claims.",
+      "source": "./",
+      "category": "productivity"
+    }
+  ]
+}

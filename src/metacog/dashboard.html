@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>metacog</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { --bg:#0d1117; --panel:#161b22; --line:#30363d; --fg:#e6edf3; --dim:#8b949e;
+          --ok:#3fb950; --bad:#f85149; --warn:#d29922; --info:#58a6ff; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:14px/1.45 ui-sans-serif,system-ui,-apple-system,sans-serif; background:var(--bg); color:var(--fg); }
+  header { display:flex; align-items:center; gap:16px; padding:12px 20px; border-bottom:1px solid var(--line); }
+  header h1 { font-size:16px; margin:0; letter-spacing:.3px; }
+  header .tag { color:var(--dim); }
+  main { display:grid; grid-template-columns:320px 1fr; height:calc(100vh - 49px); }
+  aside { border-right:1px solid var(--line); overflow:auto; }
+  section { overflow:auto; padding:16px 24px; }
+  .s { padding:10px 14px; border-bottom:1px solid var(--line); cursor:pointer; }
+  .s:hover, .s.sel { background:var(--panel); }
+  .s .top { display:flex; justify-content:space-between; }
+  .s .cwd { color:var(--dim); font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .trust { font-weight:600; font-variant-numeric:tabular-nums; }
+  .ev { display:grid; grid-template-columns:64px 1fr; gap:10px; padding:6px 0; border-bottom:1px dashed #21262d; }
+  .ev .t { color:var(--dim); font-size:12px; font-variant-numeric:tabular-nums; }
+  code, pre { font:12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace; }
+  pre { margin:4px 0 0; padding:8px; background:var(--panel); border-radius:6px; max-height:160px; overflow:auto; white-space:pre-wrap; }
+  .b { display:inline-block; padding:0 7px; border-radius:10px; font-size:11px; font-weight:600; margin-right:6px; border:1px solid; }
+  .verified { color:var(--ok); } .false { color:var(--bad); } .unverifiable, .warn { color:var(--warn); }
+  .deny { color:var(--bad); } .ask { color:var(--warn); } .flag { color:var(--dim); }
+  .card { border:1px solid var(--line); border-radius:8px; padding:12px 14px; margin:8px 0; background:var(--panel); }
+  .card.bad { border-color:var(--bad); }
+  .card h3 { margin:0 0 8px; font-size:13px; display:flex; gap:10px; align-items:center; }
+  .row { margin:4px 0; }
+  .dim { color:var(--dim); }
+  #egress { display:flex; gap:6px; flex-wrap:wrap; }
+  .host { font-size:12px; padding:1px 8px; border-radius:10px; border:1px solid var(--line); }
+  .host.out { border-color:var(--warn); color:var(--warn); }
+  .host.blocked { border-color:var(--bad); color:var(--bad); }
+  .empty { color:var(--dim); padding:40px; text-align:center; }
+</style>
+</head>
+<body>
+<header>
+  <h1>metacog</h1><span class="tag">verify anything your agent claims</span>
+  <span style="flex:1"></span><div id="egress"></div>
+</header>
+<main>
+  <aside id="sessions"></aside>
+  <section id="detail"><div class="empty">Start an agent with <code>metacog wrap claude</code> or <code>metacog wrap muse</code>.</div></section>
+</main>
+<script>
+let selected = null;
+const $ = (s) => document.querySelector(s);
+function h(tag, props = {}, ...kids) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(props)) k === "class" ? (el.className = v) : el.setAttribute(k, v);
+  for (const k of kids.flat()) if (k != null) el.append(k instanceof Node ? k : document.createTextNode(String(k)));
+  return el;
+}
+const time = (ts) => ts ? new Date(ts * 1000).toLocaleTimeString("en-GB", {hour: "2-digit", minute: "2-digit", second: "2-digit"}) : "";
+const trustColor = (t) => t == null ? "var(--dim)" : t >= 80 ? "var(--ok)" : t >= 50 ? "var(--warn)" : "var(--bad)";
+const badge = (cls, text) => h("span", {class: "b " + cls}, text);
+
+async function loadSessions() {
+  const list = await (await fetch("/api/sessions")).json();
+  const box = $("#sessions");
+  box.replaceChildren(...list.map((s) => {
+    const el = h("div", {class: "s" + (s.id === selected ? " sel" : "")},
+      h("div", {class: "top"},
+        h("span", {}, badge("flag", s.agent || "?"), time(s.start)),
+        h("span", {class: "trust", style: "color:" + trustColor(s.trust)}, s.trust == null ? "–" : s.trust)),
+      h("div", {class: "cwd"}, s.cwd || ""),
+      h("div", {class: "dim", style: "font-size:12px"},
+        `${s.turns} turns · ${s.false_claims} false · ${s.guarded} guarded`));
+    el.onclick = () => { selected = s.id; refresh(); };
+    return el;
+  }));
+  if (!selected && list.length) { selected = list[0].id; }
+}
+
+function renderVerdict(r) {
+  const bad = r.blocked || (r.problems || []).length;
+  return h("div", {class: "card" + (bad ? " bad" : "")},
+    h("h3", {}, "Verification",
+      h("span", {class: "trust", style: "color:" + trustColor(r.trust)}, r.trust == null ? "no claims" : `trust ${r.trust}`),
+      r.blocked ? badge("false", "sent back to agent") : null,
+      h("span", {class: "dim"}, `${r.model || "deterministic only"} · ${r.latency_ms} ms`)),
+    (r.claims || []).map((c) => h("div", {class: "row"}, badge(c.verdict, c.verdict), c.claim,
+      h("div", {class: "dim", style: "margin-left:4px"}, c.explanation, c.evidence && c.evidence.length ? `  (log #${c.evidence.join(", #")})` : ""))),
+    (r.findings || []).map((f) => h("div", {class: "row"}, badge(f.severity === "false" ? "false" : "warn", f.check), f.detail)),
+    (r.waste || []).map((w) => h("div", {class: "row"}, badge("flag", "waste"), w.detail, h("span", {class: "dim"}, " → " + w.tip))),
+    r.error ? h("div", {class: "row warn"}, "verifier error: " + r.error) : null);
+}
+
+function renderEvent(r) {
+  let body;
+  switch (r.event) {
+    case "UserPromptSubmit": body = h("div", {}, badge("flag", "prompt"), h("pre", {}, r.prompt)); break;
+    case "PreToolUse": return null;
+    case "PostToolUse": case "PostToolUseFailure":
+      body = h("div", {}, badge(r.ok ? "verified" : "false", r.tool), h("code", {}, r.command || r.path || ""),
+        r.exit_code != null && r.exit_code !== 0 ? h("span", {class: "false"}, ` exit ${r.exit_code}`) : null,
+        (r.output || r.content) ? h("pre", {}, (r.kind === "write" ? r.content : r.output).slice(0, 2000)) : null);
+      break;
+    case "Guard": body = h("div", {}, badge(r.decision, `${r.decision} · ${r.rule}`), r.reason); break;
+    case "Stop": body = h("div", {}, badge("flag", "final report"), h("pre", {}, r.message || "")); break;
+    case "Verdict": body = renderVerdict(r); break;
+    default: return null;
+  }
+  return h("div", {class: "ev"}, h("div", {class: "t"}, time(r.ts)), body);
+}
+
+async function loadDetail() {
+  if (!selected) return;
+  const recs = await (await fetch("/api/session/" + encodeURIComponent(selected))).json();
+  const box = $("#detail");
+  const atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 30;
+  box.replaceChildren(...recs.map(renderEvent).filter(Boolean));
+  if (atBottom) box.scrollTop = box.scrollHeight;
+}
+
+async function loadEgress() {
+  const runs = await (await fetch("/api/egress")).json();
+  const hosts = runs.length ? runs[0].hosts : [];
+  $("#egress").replaceChildren(...(hosts.length ? [h("span", {class: "dim"}, "egress:")] : []),
+    ...hosts.slice(0, 12).map((x) => h("span", {class: "host" + (x.blocked ? " blocked" : x.allowed ? "" : " out"), title: `${x.count} connections`}, x.host)));
+}
+
+async function refresh() { try { await loadSessions(); await loadDetail(); await loadEgress(); } catch (e) {} }
+refresh(); setInterval(refresh, 2000);
+</script>
+</body>
+</html>
