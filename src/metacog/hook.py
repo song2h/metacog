@@ -13,7 +13,7 @@ import sys
 import time
 import traceback
 
-from metacog import guard, llm, optimize, store, verify
+from metacog import guard, llm, optimize, packages, store, verify
 
 SHELL_TOOLS = {"bash", "shell", "exec_command", "local_shell", "run_shell_command", "terminal"}
 # Muse Code runs internal bookkeeping tools through the same hooks; they are not agent actions.
@@ -164,6 +164,8 @@ def handle(agent: str, ev: dict) -> dict | None:
         decision = guard.check(rec, history, cfg)
         if decision and decision["rule"] in guard.GREY_RULES and cfg.get("judge_guard", True) and llm.api_key():
             decision = guard.judge(rec, history, decision, cfg)
+        if not decision and rec.get("kind") == "shell":
+            decision = packages.check(rec.get("command", ""), cfg)
         _safe_append(sid, rec)
         if decision and decision["decision"] == "ask" and os.environ.get("METACOG_HEADLESS") == "1":
             decision = {**decision, "decision": "deny", "reason": decision["reason"] + " (needs a human's approval and this run is headless: ask the user instead)"}
