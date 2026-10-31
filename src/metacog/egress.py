@@ -15,7 +15,7 @@ import time
 
 from metacog import geo, guard, store
 
-IP_HOST = re.compile(r"[\d.]+|[0-9a-f:]+")
+IP_HOST = re.compile(r"\d{1,3}(\.\d{1,3}){3}|[0-9a-f]*:[0-9a-f:.]*")
 
 
 def log_path(run_id: str):

@@ -6,21 +6,34 @@ register such a name later and wait for agents to install it ("slopsquatting"). 
 `pip install` / `npm install` runs, metacog asks the public registry: a missing package is denied,
 a package first published recently needs your approval.
 
-Skipped for private indexes (--index-url, --registry, ...) and when "check_packages" is false.
+Skipped for private indexes (--index-url, --registry, PIP_INDEX_URL, pip.conf, .npmrc, [[tool.uv.index]] ...) and
+when "check_packages" is false.
 Registry errors never block: the check is advice, the install still has its own failure modes.
 """
 
+import calendar
 import json
+import os
 import re
 import shlex
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from pathlib import Path
 
-INSTALL = re.compile(r"\b(?:(?:uv\s+)?pip3?|python3?\s+-m\s+pip)\s+install\b|\buv\s+add\b|\bpoetry\s+add\b|"
+INSTALL = re.compile(r"\b(?:(?:uv\s+)?pip3?(?:\.\d+)?|python3?(?:\.\d+)?\s+-m\s+pip)\s+install\b|\buv\s+add\b|\bpoetry\s+add\b|"
                      r"\b(?:npm|pnpm|bun)\s+(?:install|i|add)\b|\byarn\s+add\b")
-CUSTOM_INDEX = re.compile(r"(?:^|\s)(-i|--index-url|--extra-index-url|--registry|--find-links|-f)\b")
+CUSTOM_INDEX = re.compile(r"(?:^|\s)(-i|--index-url|--extra-index-url|--index|--default-index|--registry|--find-links)\b|\bpip\S*\s+install\b.*\s-f\b")
+# Options whose next word is a value, not a package (pip, uv, poetry, npm).
+VALUE_OPTS = {"-r", "--requirement", "-c", "--constraint", "-e", "--editable", "--target", "-t", "--prefix", "--root", "--src",
+              "--python", "-p", "--platform", "--python-version", "--implementation", "--abi", "--log", "--cache-dir", "--report",
+              "--only-binary", "--no-binary", "--upgrade-strategy", "--config-settings", "-C", "--progress-bar", "--group", "-G",
+              "--optional", "--extra", "--extras", "-E", "--package", "--source", "--tag", "--branch", "--rev", "--bounds",
+              "--workspace", "-w", "--directory", "--project"}
+FILE_LIKE = re.compile(r"\.(whl|tgz|tar\.gz|tar\.bz2|zip)$", re.I)
+PRIVATE_ENV = ("PIP_INDEX_URL", "PIP_EXTRA_INDEX_URL", "UV_INDEX_URL", "UV_DEFAULT_INDEX", "UV_INDEX", "UV_EXTRA_INDEX_URL",
+               "npm_config_registry", "NPM_CONFIG_REGISTRY")
 SEPARATOR = re.compile(r"&&|\|\||[;|\n]")
 NAME = re.compile(r"^(@[a-z0-9][\w.-]*/)?[A-Za-z0-9][\w.-]*$")
 
@@ -45,10 +58,10 @@ def requested(cmd: str) -> list[tuple[str, str]]:
             if skip:
                 skip = False
                 continue
-            if w in ("-r", "--requirement", "-c", "--constraint", "-e", "--editable", "--target", "-t", "--prefix"):
+            if w in VALUE_OPTS:
                 skip = True
                 continue
-            if w.startswith("-") or "/" in w and not w.startswith("@") or "://" in w or w in (".", ".."):
+            if w.startswith("-") or "/" in w and not w.startswith("@") or "://" in w or w in (".", "..") or FILE_LIKE.search(w):
                 continue
             name = re.split(r"[=<>!~;\[ ]", w, maxsplit=1)[0]
             if eco == "npm" and name.count("@") > (1 if name.startswith("@") else 0):
@@ -74,14 +87,34 @@ def lookup(eco: str, name: str, timeout: float = 3) -> tuple[bool, float | None]
     else:
         times = [data.get("time", {}).get("created")] if data.get("time", {}).get("created") else []
     first = min(times) if times else None
-    return True, (time.mktime(time.strptime(first[:19], "%Y-%m-%dT%H:%M:%S")) if first else None)
+    return True, (calendar.timegm(time.strptime(first[:19], "%Y-%m-%dT%H:%M:%S")) if first else None)  # registry times are UTC
 
 
-def check(cmd: str, cfg: dict) -> dict | None:
+def private_index(eco: str, cwd: str = "") -> bool:
+    """A non-default index set outside the command line (env or config file): the names may be internal, so don't look them up."""
+    if any(os.environ.get(k) for k in PRIVATE_ENV):
+        return True
+    home = Path.home()
+    files = ([home / ".config/pip/pip.conf", home / ".pip/pip.conf", home / "Library/Application Support/pip/pip.conf",
+              Path("/etc/pip.conf"), Path(cwd or ".") / "pip.conf", Path(cwd or ".") / "uv.toml", Path(cwd or ".") / "pyproject.toml"]
+             if eco == "pypi" else [home / ".npmrc", Path(cwd or ".") / ".npmrc"])
+    for f in files:
+        try:
+            text = f.read_text(errors="replace")
+        except OSError:
+            continue
+        if re.search(r"^\s*(index-url|extra-index-url|registry)\s*=|^\s*\[\[tool\.uv\.index\]\]|^\s*\[\[tool\.poetry\.source\]\]", text, re.M):
+            return True
+    return False
+
+
+def check(cmd: str, cfg: dict, cwd: str = "") -> dict | None:
     if not cfg.get("check_packages", True) or not INSTALL.search(cmd):
         return None
     min_days = cfg.get("new_package_days", 30)
     for eco, name in requested(cmd):
+        if private_index(eco, cwd):
+            continue
         found = lookup(eco, name)
         if found is None:
             continue

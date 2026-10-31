@@ -158,10 +158,12 @@ def check(rec: dict, history: list[dict], cfg: dict) -> dict | None:
             return {"decision": "ask", "rule": "proxy-bypass", "reason": "command bypasses the egress recorder (unsets the proxy)"}
         if _rm_root(cmd):
             return {"decision": "deny", "rule": "rm-root", "reason": "recursive delete of the root or home directory"}
+        net = _network_decision(cmd, history, cfg, source="command")
+        if net and net["decision"] == "deny":  # a deny must not be downgraded by an earlier ask rule
+            return net
         for rule, pat, decision, reason in COMMAND_RULES:
             if pat.search(flat):
                 return {"decision": decision, "rule": rule, "reason": reason}
-        net = _network_decision(cmd, history, cfg, source="command")
         if net:
             return net
         if SECRET_PATHS.search(cmd):

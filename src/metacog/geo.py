@@ -115,6 +115,8 @@ def ip_country(ip: str) -> str | None:
         addr = ipaddress.ip_address(ip.strip("[]"))
     except ValueError:
         return None
+    if addr.version == 6 and addr.ipv4_mapped:
+        addr = addr.ipv4_mapped
     starts, ends, ccs = _load()[addr.version]
     i = bisect.bisect_right(starts, int(addr)) - 1
     return ccs[i] if i >= 0 and int(addr) <= ends[i] else None

@@ -66,7 +66,7 @@ def analyze(turn: list[dict]) -> list[dict]:
     same = Counter((r.get("tool"), r.get("command") or r.get("path")) for r in done if r.get("ok"))
     for (tool, target), n in same.items():
         if n >= 3 and tool and target and target not in reads:
-            size = sum(_size(r) for r in done if (r.get("command") or r.get("path")) == target)
+            size = sum(_size(r) for r in done if r.get("tool") == tool and (r.get("command") or r.get("path")) == target)
             out.append({"kind": "duplicate-call", "key": str(target), "count": n, "tokens": _tokens(size * (n - 1) // n),
                         "detail": f"{tool} `{str(target)[:80]}` ran {n} times with success",
                         "tip": "reuse the earlier result instead of running it again"})
@@ -82,11 +82,19 @@ def tips(sessions_dir: Path, project: str, min_sessions: int = 2) -> str:
         if not any(r.get("cwd") == project for r in recs):
             continue
         sessions.add(path.stem)
-        for v in (r for r in recs if r.get("event") == "Verdict"):
-            u = v.get("usage") or {}
-            if u:
-                verifications += 1
-                verify_cost += (u.get("prompt_tokens", 0) * 1.25 + u.get("completion_tokens", 0) * 4.25) / 1e6
+        last_per_turn, current = [], None
+        for r in recs:
+            if r.get("event") == "UserPromptSubmit" and current:
+                last_per_turn.append(current)
+                current = None
+            elif r.get("event") == "Verdict":
+                current = r
+                u = r.get("usage") or {}
+                if u:
+                    verifications += 1
+                    verify_cost += (u.get("prompt_tokens", 0) * 1.25 + u.get("completion_tokens", 0) * 4.25) / 1e6
+        # a turn sent back and re-verified repeats the same waste; count each turn once
+        for v in last_per_turn + ([current] if current else []):
             for w in v.get("waste", []):
                 s = seen[(w["kind"], w.get("key", w["detail"]))]
                 s["sessions"].add(path.stem)

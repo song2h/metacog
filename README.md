@@ -73,14 +73,14 @@ Other commands: `metacog dashboard`, `metacog sessions`, `metacog show <session>
 
 ### What the verifier does, and why
 
-Agents rarely invent things from nothing. In the live trials below, every false report generalised a real but momentary check ("rollout status succeeded") into a lasting state ("it is running"), and every agent corrected itself once shown the newer evidence. The design follows from that and from the literature:
+Agents rarely invent things from nothing. In the 10 round-2 live trials below, each false first report generalised a real but momentary check ("rollout status succeeded") into a lasting state ("it is running"), and each agent corrected itself once shown the newer evidence. (In an earlier round, one agent kept its false claim after two bounce-backs and was released by the block limit.) The design follows from that and from the literature:
 
 | Rule | Why |
 |---|---|
 | Claims about the current state need the latest evidence; a momentary check only supports "it was so then" | Atomic, individually checked claims (FActScore, Min et al. 2023, arXiv 2305.14251); the over-generalisation seen live |
 | Output of the agent's own `echo`/`printf`/heredoc is marked SELF-PRINTED and is not evidence | Tool output is an injection channel into agents and their monitors (AgentDojo, arXiv 2406.13352; Terekhov et al. 2025, arXiv 2510.09462) |
 | After a bounce-back, editing or deleting tests, or replacing the artifact under test, is flagged, and a claim that the original target works is false | Feedback loops invite reward hacking (Pan et al. 2024, arXiv 2407.04549; METR 2025; ImpossibleBench, arXiv 2510.20270). Seen live: an agent rebuilt the release image without the crashing code |
-| Deterministic checks for actions, the model only for reading claims; no "please don't cheat" prompt engineering | Telling models not to cheat had a negligible effect in METR's measurements (2025) |
+| Deterministic checks for actions, the model only for reading claims. The feedback does ask the agent not to change tests or the deliverable, but nothing relies on that | Telling models not to cheat had a nearly negligible effect in METR's measurements (2025) |
 | The checker never sees the worker's reasoning | Reasoning traces often omit what drove the answer (Chen et al. 2025, arXiv 2505.05410), and a persuasive story is what a judge should not grade |
 
 ## Benchmark
@@ -135,11 +135,11 @@ When the final report claims a deploy and the agent ran a mutating `kubectl`/`he
 
 ## Hallucinated dependencies
 
-Code models name packages that do not exist: at least 5.2% of packages for commercial models and 21.7% for open-source models in a study of 576,000 samples (Spracklen et al., "We Have a Package for You!", arXiv 2406.10279). An attacker can register such a name and wait for agents to install it. Before `pip`, `uv`, `poetry`, `npm`, `pnpm`, `yarn` or `bun` installs anything, metacog asks the public registry:
+Code models name packages that do not exist: at least 5.2% of packages for commercial models and 21.7% for open-source models in a study of 576,000 samples (Spracklen et al., "We Have a Package for You!", arXiv 2406.10279). An attacker can register such a name and wait for agents to install it. Before a `pip`, `uv`, `poetry`, `npm`, `pnpm`, `yarn` or `bun` install command runs, metacog asks the public registry about each package named on the command line (not `npx`/`uvx`, not requirement files):
 
 - the package does not exist: **denied**, and the agent is told the name is probably made up;
 - it was first published less than `new_package_days` ago (default 30): you are **asked**;
-- installs from a private index (`--index-url`, `--registry`, ...) are not checked, and a registry error never blocks.
+- installs from a private index are not checked (`--index-url`, `--registry`, `PIP_INDEX_URL`, `pip.conf`, `.npmrc`, `[[tool.uv.index]]`, ...), so internal names never go to the public registry; a registry error never blocks.
 
 Live run: asked to install `fastapi-jwt-auth-pro-helpers`, Claude Code was stopped before pip ran, reported that the name does not exist on PyPI, and suggested real packages. Turn off with `"check_packages": false`.
 
@@ -153,7 +153,7 @@ On 2026-10-26 Cohere reported that an open-weight model (Qwen3.8-Flash-Next), ru
 | `CN-CO` | services run by Chinese companies whose servers are elsewhere or not established (Volcano Engine telemetry, ByteDance/Trae, Alibaba RUM used by Qwen Code usage statistics, Moonshot, Zhipu, MiniMax) | logged |
 | `CN-TLD` | any `.cn` name (weak: mirrors and documentation sites use it too) | logged |
 
-Each domain in `src/metacog/geo.py` carries its source. Blocking happens in two places: the command guard (commands and written scripts, before they run) and the egress proxy (every connection from the agent and its children, checked after DNS resolution, connecting only to the checked address). Change the defaults with `"block_countries"` / `"watch_countries"` in `~/.metacog/config.json`, or `METACOG_BLOCK_COUNTRIES` (`""` = detect only, `CN,CN-CO,HK` = stricter). A host on `allow_hosts` is never blocked by country, so a DeepSeek or DashScope user can allow their own endpoint. The guard also asks before reading cloud instance metadata (`169.254.169.254`).
+Each domain in `src/metacog/geo.py` carries its source. Blocking happens in two places: the command guard (commands and written scripts, before they run) and, under `metacog wrap`, the egress proxy (every connection from the agent and its children that goes through `HTTPS_PROXY`, checked after DNS resolution, connecting only to the checked address). Change the defaults with `"block_countries"` / `"watch_countries"` in `~/.metacog/config.json`, or `METACOG_BLOCK_COUNTRIES` (`""` = detect only, `CN,CN-CO,HK` = stricter). A host on `allow_hosts` is never blocked by country, so a DeepSeek or DashScope user can allow their own endpoint. The guard also asks before reading cloud instance metadata (`169.254.169.254`).
 
 Measured from Korea on 2026-10-31, IP ranges alone would miss most of these services. `api.deepseek.com` resolved to AWS CloudFront, `api.moonshot.cn` to a Singapore range and `www.baidu.com` to Hong Kong; only `dashscope.aliyuncs.com` resolved to CN ranges. Allocation is also not location: `1.1.1.1` is allocated to AU. That is why names count as much as addresses.
 

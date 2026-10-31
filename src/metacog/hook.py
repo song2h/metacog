@@ -164,8 +164,8 @@ def handle(agent: str, ev: dict) -> dict | None:
         decision = guard.check(rec, history, cfg)
         if decision and decision["rule"] in guard.GREY_RULES and cfg.get("judge_guard", True) and llm.api_key():
             decision = guard.judge(rec, history, decision, cfg)
-        if not decision and rec.get("kind") == "shell":
-            decision = packages.check(rec.get("command", ""), cfg)
+        if (not decision or decision["decision"] == "flag") and rec.get("kind") == "shell":
+            decision = packages.check(rec.get("command", ""), cfg, rec.get("cwd", "")) or decision
         _safe_append(sid, rec)
         if decision and decision["decision"] == "ask" and os.environ.get("METACOG_HEADLESS") == "1":
             decision = {**decision, "decision": "deny", "reason": decision["reason"] + " (needs a human's approval and this run is headless: ask the user instead)"}

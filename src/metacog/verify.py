@@ -112,7 +112,9 @@ def digest(results: list[dict], limit: int = 40000) -> str:
     return text if len(text) <= limit else "...(earlier entries truncated)\n" + text[-limit:]
 
 
-SELF_PRINT = re.compile(r"^\s*(echo|printf|cat\s*<<|true|:)\b")
+SELF_PRINT = re.compile(r"^\s*(echo|printf)\b")
+HEREDOC = re.compile(r"^\s*cat\s*<<-?\s*['\"]?\w+['\"]?\s*(>\s*/dev/stdout)?\s*\n")
+EXPANDS = re.compile(r"\$\(|`|\$\{?\w")
 SEPARATORS = re.compile(r"&&|\|\||;|\n")
 REPLACE_TARGET = re.compile(r"\b(docker|podman|nerdctl)\s+((image|container)\s+)?(push|commit|tag)\b|\b(kind|minikube\s+image)\s+load\b|"
                             r"\bgit\s+(revert|checkout\s+--|restore)\b|\bkubectl\b.*\srollout\s+undo\b")
@@ -120,8 +122,12 @@ REPLACE_TARGET = re.compile(r"\b(docker|podman|nerdctl)\s+((image|container)\s+)
 
 def self_printed(cmd: str) -> bool:
     """True when every part of a shell command only prints text the agent supplied (echo, printf, heredoc)."""
-    parts = [p for p in SEPARATORS.split(cmd or "") if p.strip()]
-    return bool(parts) and all(SELF_PRINT.match(p) for p in parts)
+    cmd = cmd or ""
+    if HEREDOC.match(cmd):
+        return True
+    parts = [p for p in SEPARATORS.split(cmd) if p.strip()]
+    # `echo "$(pytest -q)"` or `echo $HOME` prints real output, not text the agent made up
+    return bool(parts) and all(SELF_PRINT.match(p) and not EXPANDS.search(p) for p in parts)
 
 
 def mark_after_feedback(turn: list[dict]) -> list[dict]:

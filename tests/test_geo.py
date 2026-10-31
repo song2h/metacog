@@ -23,6 +23,7 @@ def test_ip_and_name_lookup():
     fake_ranges()
     assert geo.ip_country("203.0.113.9") == "CN" and geo.ip_country("198.51.100.1") == "JP"
     assert geo.ip_country("2001:db8::1") == "CN" and geo.ip_country("192.0.2.1") is None
+    assert geo.ip_country("::ffff:203.0.113.9") == "CN"
     assert geo.host_country("upload.example.cn")[0] == "CN-TLD"
     assert geo.host_country("sanmaohe.oss-cn-beijing.aliyuncs.com")[0] == "CN"  # the bucket in the Cohere report
     assert geo.host_country("ark.cn-beijing.volces.com")[0] == "CN" and geo.host_country("bucket.oss-cn-hongkong.aliyuncs.com")[0] == "HK"
