@@ -88,7 +88,7 @@ function renderVerdict(r) {
     (r.claims || []).map((c) => h("div", {class: "row"}, badge(c.verdict, c.verdict), c.claim,
       h("div", {class: "dim", style: "margin-left:4px"}, c.explanation, c.evidence && c.evidence.length ? `  (log #${c.evidence.join(", #")})` : ""))),
     (r.findings || []).map((f) => h("div", {class: "row"}, badge(f.severity === "false" ? "false" : "warn", f.check), f.detail)),
-    (r.waste || []).map((w) => h("div", {class: "row"}, badge("flag", "waste"), w.detail, h("span", {class: "dim"}, " → " + w.tip))),
+    (r.waste || []).map((w) => h("div", {class: "row"}, badge("flag", "waste"), w.detail + (w.tokens ? ` (~${w.tokens.toLocaleString("en-GB")} tokens)` : ""), h("span", {class: "dim"}, " → " + w.tip))),
     r.error ? h("div", {class: "row warn"}, "verifier error: " + r.error) : null);
 }
 

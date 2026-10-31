@@ -275,7 +275,12 @@ def cmd_show(a):
             for f in r.get("findings", []):
                 print(f"   {f['severity']:<13} {f['detail']}")
             for w in r.get("waste", []):
-                print(f"   waste         {w['detail']} → {w['tip']}")
+                print(f"   waste         {w['detail']} (~{w.get('tokens', 0):,} tokens) → {w['tip']}")
+
+
+def cmd_tips(a):
+    from metacog import optimize
+    print(optimize.tips(store.SESSIONS, os.path.realpath(a.project), a.min_sessions))
 
 
 def main(argv=None):
@@ -315,6 +320,11 @@ def main(argv=None):
     s = sub.add_parser("show", help="print verdicts and guard decisions for a session")
     s.add_argument("session", help="session id or prefix")
     s.set_defaults(fn=cmd_show)
+
+    s = sub.add_parser("tips", help="turn waste that repeats across a project's sessions into lines for CLAUDE.md / AGENTS.md")
+    s.add_argument("--project", default=".", help="project directory (default: current)")
+    s.add_argument("--min-sessions", type=int, default=2)
+    s.set_defaults(fn=cmd_tips)
 
     a = p.parse_args(argv)
     a.fn(a)

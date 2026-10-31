@@ -165,3 +165,22 @@ def test_tampering_via_shell_heredoc_and_tail_is_not_masking():
     cmd = "cat > tests/test_a.py <<'E'\nimport pytest\n@pytest.mark.skip\ndef test_a(): ...\nE"
     assert [x["check"] for x in verify.deterministic("ok", [post(cmd)], "")] == ["test-tampering"]
     assert verify.deterministic("4 tests pass", [post("pytest -q | tail -5", out="4 passed")], "") == []
+
+
+def test_waste_tokens_and_project_tips(tmp_path):
+    big = {"event": "PostToolUse", "kind": "shell", "tool": "Bash", "command": "pytest", "ok": True, "output_len": 80_000}
+    fail = {"event": "PostToolUseFailure", "kind": "shell", "tool": "Bash", "command": "make build", "ok": False,
+            "output": "error: missing libssl", "output_len": 400}
+    waste = optimize.analyze([big, fail, fail])
+    by = {w["kind"]: w for w in waste}
+    assert by["large-output"]["tokens"] == 20_000 and "pytest -q" in by["large-output"]["tip"]
+    assert by["retry-loop"]["tokens"] == 100 and by["retry-loop"]["error"] == "error: missing libssl"
+    sessions = tmp_path / "s"
+    sessions.mkdir()
+    for n in range(2):
+        (sessions / f"s{n}.jsonl").write_text("\n".join(json.dumps(r) for r in [
+            {"event": "UserPromptSubmit", "cwd": "/proj"},
+            {"event": "Verdict", "waste": waste, "usage": {"prompt_tokens": 1000, "completion_tokens": 500}}]) + "\n")
+    text = optimize.tips(sessions, "/proj")
+    assert "2 sessions recorded" in text and "pytest -q" in text and "missing libssl" in text and "$0.007" in text
+    assert "No waste pattern" in optimize.tips(sessions, "/other")
