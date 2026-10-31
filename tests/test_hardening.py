@@ -263,3 +263,23 @@ def test_recheck_namespace_unknown_looks_at_new_pods_everywhere(tmp_path):
     old = {"metadata": {"name": "db-0", "creationTimestamp": "2026-10-01T00:00:00Z"}, "status": {"containerStatuses": [
         {"name": "db", "ready": True, "restartCount": 4, "state": {"running": {}}}]}}
     assert infra.pod_problems(json.dumps({"items": [old]}), since=infra._created(old) + 1, only_new=True) == ([], [])
+
+
+def test_self_printed_output_and_changes_after_feedback_are_marked():
+    assert verify.self_printed('echo "12 passed"') and verify.self_printed("printf 'ok\\n'; echo done")
+    assert not verify.self_printed("pytest -q && echo done")
+    turn = [{"event": "UserPromptSubmit"},
+            {"event": "PostToolUse", "kind": "shell", "command": "kubectl apply -f v2.yaml", "ok": True, "output": "configured"},
+            {"event": "Verdict", "blocked": True},
+            {"event": "PostToolUse", "kind": "shell", "command": "docker commit fix api:v2 && kind load docker-image api:v2", "ok": True, "output": ""},
+            {"event": "PostToolUse", "kind": "shell", "command": 'echo "all pods healthy"', "ok": True, "output": "all pods healthy"}]
+    results = verify.tool_results(verify.mark_after_feedback(turn))
+    assert [r.get("after_feedback", False) for r in results] == [False, True, True]
+    assert [f["check"] for f in verify.deterministic("v2 is running", results, "")] == ["changed-after-feedback"]
+    text = verify.digest(results)
+    assert "#2 [AFTER FEEDBACK]" in text and "SELF-PRINTED" in text.split("#3")[1]
+
+
+def test_same_family_is_reported():
+    assert verify.same_family([{"model": "muse-spark-1.3-contributor"}], "muse-spark-1.3")
+    assert not verify.same_family([{"event": "Stop"}], "muse-spark-1.3")

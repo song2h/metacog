@@ -7,8 +7,12 @@ Two signals, because neither is enough alone:
   foreign CDN or cloud region has foreign IPs.
 - Domain names: services tied to a country by public reporting (see DOMAINS), plus country TLDs.
 
-Policy: config "block_countries" (default ["CN"]); env METACOG_BLOCK_COUNTRIES overrides it
-("" turns blocking off and leaves detection on, "CN,HK" adds Hong Kong).
+Codes: ISO countries from APNIC (CN, HK, ...) plus "CN-CO" for services run by Chinese companies whose servers are
+outside mainland China or not established (domain list only).
+"CN-TLD" marks a .cn name (weak: mirrors and docs sites use it).
+Policy: config "block_countries" (default ["CN"]) and "watch_countries" (default ["CN", "CN-CO", "CN-TLD"]: logged, not blocked);
+env METACOG_BLOCK_COUNTRIES overrides block_countries ("" = detect only, "CN,CN-CO,HK" = stricter).
+A host on allow_hosts is never blocked by country, so a DeepSeek or DashScope user can allow their endpoint.
 """
 
 import bisect
@@ -21,8 +25,29 @@ from metacog import store
 
 APNIC_URL = "https://ftp.apnic.net/stats/apnic/delegated-apnic-latest"
 TLDS = {"CN": (".cn",), "HK": (".hk",), "MO": (".mo",)}
-# Hostname suffix -> country, each tied to a public source. Matched on whole labels.
-DOMAINS: dict[str, str] = {}
+# Cloud endpoints whose name carries a mainland region (oss-cn-beijing.aliyuncs.com, ark.cn-beijing.volces.com).
+# cn-hongkong is Hong Kong. Source for the Beijing OSS upload: Cohere blog, 2026-10-26 (see README).
+REGION_HOST = re.compile(r"(?:^|\.)(?:oss-)?cn-(?!hongkong)[a-z]+(?:-\d+)?\.(?:[a-z0-9-]+\.)?(?:aliyuncs|volces)\.com$")
+HK_REGION_HOST = re.compile(r"(?:^|\.)(?:oss-)?cn-hongkong\.(?:[a-z0-9-]+\.)?aliyuncs\.com$")
+# Hostname suffix -> (code, source). "CN" = documented as located in mainland China; "CN-CO" = run by a Chinese company,
+# location outside China or not established. Matched on whole labels.
+DOMAINS: dict[str, tuple[str, str]] = {
+    "dashscope.aliyuncs.com": ("CN", "Alibaba Model Studio, Beijing region (Alibaba docs)"),
+    "cmpassport.com": ("CN-CO", "China Mobile login service found in DeepSeek's web code (Feroot, 2025-02)"),
+    "volces.com": ("CN-CO", "Volcano Engine; DeepSeek iOS app telemetry (NowSecure, 2025-02-06)"),
+    "volceapplog.com": ("CN-CO", "Volcano Engine app log; DeepSeek Android app (SecurityScorecard, 2025-02-10)"),
+    "fengkongcloud.com": ("CN-CO", "device fingerprinting sent over plain HTTP by DeepSeek iOS (NowSecure, 2025-02-06)"),
+    "byteoversea.com": ("CN-CO", "ByteDance telemetry used by the Trae IDE (Unit 221B, 2025-03-31)"),
+    "byteintlapi.com": ("CN-CO", "ByteDance gateway used by the Trae IDE (Unit 221B, 2025-03-31)"),
+    "bytednsdoc.com": ("CN-CO", "ByteDance static host used by the Trae IDE (Unit 221B, 2025-03-31)"),
+    "trae.ai": ("CN-CO", "Trae IDE API; telemetry kept flowing with the opt-out on (The Register, 2025-07-28)"),
+    "rum.aliyuncs.com": ("CN-CO", "Alibaba Cloud RUM; Qwen Code usage statistics, on by default (Qwen Code docs)"),
+    "alibaba-inc.com": ("CN-CO", "Alibaba internal hosts; Qwen Code sends a session header to routify hosts (Qwen Code docs)"),
+    "deepseek.com": ("CN", "DeepSeek; its privacy policy says it stores personal data in the PRC (policy updated 2026-02-10)"),
+    "moonshot.ai": ("CN-CO", "Moonshot AI (Kimi) API"),
+    "z.ai": ("CN-CO", "Zhipu AI (GLM) API"),
+    "minimax.io": ("CN-CO", "MiniMax API"),
+}
 IP_LITERAL = re.compile(r"(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}(?![\w.])|\[[0-9a-fA-F:]+\]")
 
 _ranges: dict[int, tuple[list[int], list[int], list[str]]] | None = None
@@ -35,7 +60,7 @@ def blocked_countries(cfg: dict) -> set[str]:
 
 
 def watched_countries(cfg: dict) -> set[str]:
-    return blocked_countries(cfg) | {c.upper() for c in cfg.get("watch_countries", ["CN"])}
+    return blocked_countries(cfg) | {c.upper() for c in cfg.get("watch_countries", ["CN", "CN-CO", "CN-TLD"])}
 
 
 def data_path():
@@ -100,12 +125,16 @@ def host_country(host: str) -> tuple[str, str] | None:
     host = host.lower().rstrip(".").strip("[]")
     if (cc := ip_country(host)):
         return cc, f"{host} is in an APNIC range allocated to {cc}"
-    for suffix, cc in DOMAINS.items():
+    if REGION_HOST.search(host):
+        return "CN", "cloud endpoint in a mainland China region (name contains cn-<region>)"
+    if HK_REGION_HOST.search(host):
+        return "HK", "cloud endpoint in the Hong Kong region"
+    for suffix, (cc, source) in DOMAINS.items():
         if host == suffix or host.endswith("." + suffix):
-            return cc, f"{suffix} is a {cc} service (domain list)"
+            return cc, f"{suffix}: {source}"
     for cc, tlds in TLDS.items():
-        if host.endswith(tlds):
-            return cc, f"{cc} country domain"
+        if host.endswith(tlds):  # weak: mirrors and docs sites use .cn too, so it is watched, not blocked, by default
+            return f"{cc}-TLD", f"{cc} country domain"
     return None
 
 

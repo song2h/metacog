@@ -233,6 +233,8 @@ def _print_run_summary(since: float, run_id: str, no_egress: bool) -> None:
         false = sum(c["verdict"] == "false" for v in verdicts for c in v.get("claims", []))
         lines.append(f"  session {p.stem[:8]}: {len(verdicts)} verified turns, {false} false claims, "
                      f"{len(guards)} guarded actions, trust {last.get('trust', '-')}")
+        if any(v.get("same_family") for v in verdicts):
+            lines.append("    note: the verifier is from the same model family as this agent; judges tend to favour their own family")
     if not no_egress:
         seen = egress.summary(run_id)
         for h in (h for h in seen if h.get("country")):

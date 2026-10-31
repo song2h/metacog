@@ -51,6 +51,7 @@ COMMAND_RULES = [
     ("image-overwrite", re.compile(r"\b(docker|podman|nerdctl)\s+((image|container)\s+)?(push|commit)\b|\bbuildx\s+build\b.*\s--push\b|"
                 r"\b(kind|minikube\s+image)\s+load\b|\bk3d\s+image\s+import\b|\b(crane|skopeo)\s+(copy|cp|push)\b"),
      "ask", "publishes or replaces a container image"),
+    ("cloud-metadata", re.compile(r"169\.254\.169\.254|metadata\.google\.internal|fd00:ec2::254"), "ask", "reads cloud instance metadata, where machine credentials live"),
     ("chmod-777", re.compile(r"\bchmod\s+-R\s+777\b"), "ask", "makes files world-writable"),
 ]
 GREY_RULES = {"unknown-upload", "script-exfil"}
@@ -93,7 +94,7 @@ def _country_decision(text: str, cfg: dict, source: str) -> dict | None:
     hits = {h: hit for h in targets if (hit := geo.host_country(h)) and hit[0] in geo.watched_countries(cfg)}
     if not hits:
         return None
-    blocked = {h: hit for h, hit in hits.items() if hit[0] in geo.blocked_countries(cfg)}
+    blocked = {h: hit for h, hit in hits.items() if hit[0] in geo.blocked_countries(cfg) and not allowed(h, cfg["allow_hosts"])}
     pick = blocked or hits
     why = "; ".join(hit[1] for hit in pick.values())
     if blocked:
@@ -103,11 +104,18 @@ def _country_decision(text: str, cfg: dict, source: str) -> dict | None:
 
 
 def _network_decision(text: str, history: list[dict], cfg: dict, source: str) -> dict | None:
-    if (country := _country_decision(text, cfg, source)) and country["decision"] == "deny":
+    """Country deny, then upload/exfil deny or ask, then a country flag, then an unknown-host flag."""
+    country = _country_decision(text, cfg, source)
+    if country and country["decision"] == "deny":
         return country
+    net = _upload_decision(text, history, cfg, source)
+    return net if net and net["decision"] != "flag" else country or net
+
+
+def _upload_decision(text: str, history: list[dict], cfg: dict, source: str) -> dict | None:
     net = bool(NET_TOOLS.search(text))
     if not net:
-        return country
+        return None
     secret = bool(SECRET_PATHS.search(text))
     found = hosts(text)
     outside = [h for h in found if not allowed(h, cfg["allow_hosts"])]

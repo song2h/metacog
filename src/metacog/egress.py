@@ -65,7 +65,7 @@ class _Handler(socketserver.BaseRequestHandler):
         rec = {"ts": time.time(), "host": host, "port": port, "method": method, "allowed": allowed, "blocked": blocked}
         if (hit := geo.classify(host, ips)) and hit[0] in geo.watched_countries(cfg):
             rec.update(country=hit[0], why=hit[1])
-            if hit[0] in self.server.block_countries:
+            if hit[0] in self.server.block_countries and not allowed:
                 rec["blocked"] = blocked = True
         if IP_HOST.fullmatch(host):
             rec["direct_ip"] = True
