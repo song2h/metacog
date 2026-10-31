@@ -221,6 +221,10 @@ def test_recheck_targets_come_from_the_change_itself(tmp_path):
     assert infra.targets(log, CFG, str(tmp_path)) == {("kind-demo", "shop")}
     log[0]["command"] = "kubectl --context kind-demo apply -f missing.yaml"
     assert infra.targets(log, CFG, str(tmp_path)) == {("kind-demo", infra.ALL)}  # unreadable: new pods anywhere
+    # Live miss: the demo manifest uses flow style.
+    (tmp_path / "flow.yaml").write_text("metadata: {name: api, namespace: shop}\nspec:\n  namespaceSelector: {}\n")
+    log[0]["command"] = "kubectl --context kind-demo apply -f flow.yaml"
+    assert infra.targets(log, CFG, str(tmp_path)) == {("kind-demo", "shop")}
     log[0]["command"] = "kubectl --context kind-demo -nweb set image deploy/api api=x:2"
     assert infra.targets(log, CFG, str(tmp_path)) == {("kind-demo", "web")}
     assert infra.DEPLOY_CLAIM.search("pod `api-dcd8c496-5cncs` is 1/1 Running")

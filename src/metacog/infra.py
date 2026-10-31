@@ -19,7 +19,7 @@ from datetime import datetime
 DEPLOY_CLAIM = re.compile(r"\b(deploy\w*|roll(ed|s|ing)?[ -]?out|released?|redeployed|running|ready|healthy|available|live)\b", re.I)
 KUBE_CMD = re.compile(r"\b(kubectl|helm)\b")
 FILE_FLAG = re.compile(r"(?:\s-f|--filename)[= ]?(\S+)")
-MANIFEST_NS = re.compile(r"^\s*namespace:\s*['\"]?([\w.-]+)", re.M)
+MANIFEST_NS = re.compile(r"(?:^|[{,\s])namespace:\s*['\"]?([\w.-]+)", re.M)  # block and flow style
 KUSTOMIZE = re.compile(r"\s(-k|--kustomize)\b")
 ALL = "*"  # namespace unknown: look at pods created since the change in every namespace
 SEPARATOR = re.compile(r"&&|\|\||[;|\n]")

@@ -128,7 +128,7 @@ def check(rec: dict, history: list[dict], cfg: dict) -> dict | None:
 
     if kind == "shell":
         if SUPERVISOR_CMDS.search(flat) or (SUPERVISOR_FILES.search(flat) and WRITES_FILE.search(flat)):
-            return {"decision": "deny", "rule": "tamper-supervisor", "reason": "command disables or modifies the agent's oversight (metacog hooks)"}
+            return {"decision": "deny", "rule": "tamper-supervisor", "reason": "command touches the agent's oversight (metacog hooks, config or logs)"}
         if PROXY_BYPASS.search(cmd):
             return {"decision": "ask", "rule": "proxy-bypass", "reason": "command bypasses the egress recorder (unsets the proxy)"}
         if _rm_root(cmd):
