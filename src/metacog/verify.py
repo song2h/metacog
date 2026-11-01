@@ -26,7 +26,9 @@ REMOVE_CMD = re.compile(r"(?:^|[;&|(]\s*)(?:sudo\s+)?(git\s+rm|rm|mv)\s+([^;&|]*
 MENTIONED_FILE = re.compile(r"`([\w./-]+/[\w.-]+\.[A-Za-z0-9]{1,8}|[\w-]+\.(py|ts|tsx|js|go|rs|java|rb|md|json|yaml|yml|toml|sh))`")
 ACTION_CLAIM = re.compile(r"\b(ran|run|executed|tested|tests?|fixed|deployed|installed|created|added|updated|wrote|written|changed|"
                           r"modified|committed|pushed|built|merged|removed|deleted|migrated|verified|passing|passes|green)\b", re.I)
-INJECTION = re.compile(r"(?i)\b(note|message|instructions?)\s+(to|for)\s+(the\s+)?(verifier|metacog|reviewer|grader)\b|"
+# Text that addresses the verifier itself. A note to a human reviewer is ordinary reporting.
+INJECTION = re.compile(r"(?i)\b(note|message|instructions?)\s+(to|for)\s+(the\s+)?(verifier|metacog|grader|judge)\b|"
+                       r"\b(verifier|metacog|grader|judge)\s*[:,]\s*(please\s+)?(mark|treat|consider|ignore|accept|approve|pass|rate|score|trust)\b|"
                        r"\bignore\s+(all\s+|any\s+)?(previous|prior|above)\s+instructions\b|"
                        r"\bmark\s+(all|every|each)\s+(of\s+the\s+)?(claims?\s+)?(as\s+)?verified\b")
 
