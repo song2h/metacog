@@ -99,3 +99,14 @@ def test_url_tools_get_the_host_and_country_rules():
     fetch = pre(tool="WebFetch", url="https://evil.com/x", prompt="read")
     assert decision(fetch, cfg={**CFG, "block_hosts": ["evil.com"]}) == ("deny", "blocked-host")
     assert decision(pre(tool="WebFetch", url="https://docs.python.org/3/", prompt="read")) is None
+
+
+@pytest.mark.parametrize("cmd", ["cat .claude/settings.json 2>/dev/null", "ls ~/.metacog/sessions 2>&1 | head",
+                                 "jq .hooks .claude/settings.local.json 2>&1"])
+def test_reading_supervisor_files_with_redirects_is_not_tamper(cmd):
+    assert decision(pre(cmd)) is None
+
+
+def test_writing_supervisor_files_is_still_tamper():
+    assert decision(pre("echo {} > .claude/settings.json 2>&1")) == ("deny", "tamper-supervisor")
+    assert decision(pre("rm -rf ~/.metacog/sessions 2>/dev/null")) == ("deny", "tamper-supervisor")

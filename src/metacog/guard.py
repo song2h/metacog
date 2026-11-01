@@ -41,6 +41,7 @@ RAW_NET = re.compile(r"\b(scp|sftp|rsync|nc|ncat|netcat|socat|telnet|ftp)\b|/dev
 ENCODE = re.compile(r"\b(base64|xxd|gzip|tar\s+-?c|zip|openssl\s+enc)\b")
 SUPERVISOR_FILES = re.compile(r"\.claude/settings(\.local)?\.json|\.claude/plugins/|\.muse/hooks\.json|\.config/muse/settings\.json|"
                               r"\.codex/(hooks\.json|config\.toml)|\.metacog/|\.config/metacog/")
+NOT_A_WRITE = re.compile(r"[\d&]?>>?\s*(/dev/null\b|&\d+)")  # 2>/dev/null, 2>&1
 WRITES_FILE = re.compile(r"(>|\btee\b|\bsed\s+-i|\brm\b|\bmv\b|\bcp\b|\bln\b|\btruncate\b|open\(|write|unlink|remove|rename|json\.dump|chmod)")
 SUPERVISOR_CMDS = re.compile(r"\bmetacog\s+(uninstall|install)\b|\bclaude\s+plugins?\s+(uninstall|disable|remove)\b|"
                              r"\b(uv\s+tool|pipx|pip3?)\s+uninstall\s+(-y\s+)?metacog\b|\b(pkill|killall)\b.*\bmetacog\b")
@@ -222,7 +223,7 @@ def check(rec: dict, history: list[dict], cfg: dict) -> dict | None:
             return script
 
     if kind == "shell":
-        if SUPERVISOR_CMDS.search(flat) or (SUPERVISOR_FILES.search(flat) and WRITES_FILE.search(flat)):
+        if SUPERVISOR_CMDS.search(flat) or (SUPERVISOR_FILES.search(flat) and WRITES_FILE.search(NOT_A_WRITE.sub("", flat))):
             return {"decision": "deny", "rule": "tamper-supervisor", "reason": "command touches the agent's oversight (metacog hooks, config or logs)"}
         if PROXY_BYPASS.search(cmd):
             return {"decision": "ask", "rule": "proxy-bypass", "reason": "command bypasses the egress recorder (unsets the proxy)"}
