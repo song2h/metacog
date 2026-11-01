@@ -192,6 +192,6 @@ def test_show_prints_reports_guarded_commands_and_verdicts(capsys):
     store.append("s9", {"event": "Stop", "message": "Done. Pod is 1/1 Running."})
     store.append("s9", {"event": "Verdict", "trust": 33, "blocked": True,
                         "claims": [{"verdict": "false", "claim": "Pod is 1/1 Running", "explanation": "re-check: restarts=1"}]})
-    cli.main(["show", "s9"])
+    cli.main(["show"])  # no id: the latest session
     out = capsys.readouterr().out
     assert "rm -rf ~" in out and "[report] Done. Pod is 1/1 Running." in out and "false" in out and out.index("[report]") < out.index("[verdict]")

@@ -273,7 +273,7 @@ def cmd_sessions(a):
 
 
 def cmd_show(a):
-    matches = [p for p in store.sessions() if p.stem.startswith(a.session)]
+    matches = [p for p in store.sessions() if p.stem.startswith(a.session or "")]  # newest first
     if not matches:
         sys.exit("no such session")
     for r in store.read(matches[0].stem):
@@ -332,7 +332,7 @@ def main(argv=None):
     s.add_argument("-n", type=int, default=20, help="how many (default 20)")
     s.set_defaults(fn=cmd_sessions)
     s = sub.add_parser("show", help="print verdicts and guard decisions for a session")
-    s.add_argument("session", help="session id or prefix")
+    s.add_argument("session", nargs="?", help="session id or prefix (default: the latest session)")
     s.set_defaults(fn=cmd_show)
 
     s = sub.add_parser("tips", help="draft CLAUDE.md / AGENTS.md lines from waste that repeats across a project's sessions")
