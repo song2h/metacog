@@ -72,6 +72,8 @@ def cmd_init(a):
     key = llm.api_key()
     if not key:
         key = getpass.getpass("Meta Model API key (input hidden): ").strip()
+        if not key:
+            sys.exit("no key entered; nothing saved (get one at https://dev.meta.ai)")
         store.ENV_FILE.parent.mkdir(parents=True, exist_ok=True)
         fd = os.open(store.ENV_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w") as f:
@@ -247,11 +249,16 @@ def _print_run_summary(since: float, run_id: str, no_egress: bool) -> None:
 
 
 def cmd_dashboard(a):
+    import webbrowser
     from metacog import dashboard
+    if not a.no_open:
+        webbrowser.open(f"http://127.0.0.1:{a.port}")
     dashboard.serve(a.port)
 
 
 def cmd_sessions(a):
+    if not store.sessions():
+        print(f"no sessions yet in {store.SESSIONS}; start one with `metacog wrap claude` or `metacog wrap muse`")
     for p in store.sessions()[: a.n]:
         recs = store.read(p.stem)
         v = [r for r in recs if r.get("event") == "Verdict"]
@@ -291,9 +298,9 @@ def main(argv=None):
     s = sub.add_parser("wrap", help="run an agent with metacog attached for this session only")
     s.add_argument("agent", choices=AGENTS)
     s.add_argument("--port", type=int, default=8977, help="dashboard port")
-    s.add_argument("--no-dashboard", action="store_true")
+    s.add_argument("--no-dashboard", action="store_true", help="do not start the dashboard")
     s.add_argument("--no-egress", action="store_true", help="do not route agent traffic through the egress recorder")
-    s.add_argument("--egress-enforce", action="store_true", help="refuse connections to hosts that are not on the allow list")
+    s.add_argument("--egress-enforce", action="store_true", help="also refuse hosts that are not on allow_hosts (countries are blocked either way)")
     s.add_argument("args", nargs=argparse.REMAINDER, help="arguments passed to the agent")
     s.set_defaults(fn=cmd_wrap)
 
@@ -305,25 +312,26 @@ def main(argv=None):
     s.add_argument("agent", choices=AGENTS)
     s.set_defaults(fn=cmd_uninstall)
 
-    s = sub.add_parser("hook", help="hook entry point (called by the agent)")
+    s = sub.add_parser("hook")  # internal: called by the agent's hook runner
     s.add_argument("agent", choices=AGENTS)
     s.set_defaults(fn=cmd_hook)
 
     sub.add_parser("init", help="store the Meta Model API key and check setup").set_defaults(fn=cmd_init)
     sub.add_parser("doctor", help="check setup").set_defaults(fn=cmd_doctor)
-    s = sub.add_parser("dashboard", help="open the local dashboard")
-    s.add_argument("--port", type=int, default=8977)
+    s = sub.add_parser("dashboard", help="open the local dashboard (sessions, verdicts, guard decisions, egress)")
+    s.add_argument("--port", type=int, default=8977, help="port on 127.0.0.1 (default 8977)")
+    s.add_argument("--no-open", action="store_true", help="do not open a browser")
     s.set_defaults(fn=cmd_dashboard)
     s = sub.add_parser("sessions", help="list recent sessions")
-    s.add_argument("-n", type=int, default=20)
+    s.add_argument("-n", type=int, default=20, help="how many (default 20)")
     s.set_defaults(fn=cmd_sessions)
     s = sub.add_parser("show", help="print verdicts and guard decisions for a session")
     s.add_argument("session", help="session id or prefix")
     s.set_defaults(fn=cmd_show)
 
-    s = sub.add_parser("tips", help="turn waste that repeats across a project's sessions into lines for CLAUDE.md / AGENTS.md")
+    s = sub.add_parser("tips", help="draft CLAUDE.md / AGENTS.md lines from waste that repeats across a project's sessions")
     s.add_argument("--project", default=".", help="project directory (default: current)")
-    s.add_argument("--min-sessions", type=int, default=2)
+    s.add_argument("--min-sessions", type=int, default=2, help="report waste seen in at least this many sessions (default 2)")
     s.set_defaults(fn=cmd_tips)
 
     a = p.parse_args(argv)

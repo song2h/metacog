@@ -170,7 +170,8 @@ def handle(agent: str, ev: dict) -> dict | None:
         if decision and decision["decision"] == "ask" and os.environ.get("METACOG_HEADLESS") == "1":
             decision = {**decision, "decision": "deny", "reason": decision["reason"] + " (needs a human's approval and this run is headless: ask the user instead)"}
         if decision:
-            _safe_append(sid, {"event": "Guard", "agent": agent, "session": sid, "tool_use_id": rec.get("tool_use_id"), **decision})
+            _safe_append(sid, {"event": "Guard", "agent": agent, "session": sid, "tool_use_id": rec.get("tool_use_id"),
+                                   "target": (rec.get("command") or rec.get("path") or "")[:500], **decision})
             if decision["decision"] in ("deny", "ask"):
                 return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": decision["decision"],
                                                "permissionDecisionReason": f"metacog: {decision['reason']}"}}

@@ -74,7 +74,7 @@ def _bind(port: int) -> ThreadingHTTPServer:
 
 def serve(port: int) -> None:
     srv = _bind(port)
-    print(f"metacog dashboard on http://127.0.0.1:{port}  (Ctrl-C to stop)")
+    print(f"metacog dashboard on http://127.0.0.1:{port}  (Ctrl-C to stop)", flush=True)
     try:
         srv.serve_forever()
     except KeyboardInterrupt:

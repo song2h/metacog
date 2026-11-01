@@ -9,7 +9,7 @@
   "plugins": [
     {
       "name": "metacog",
-      "description": "Verify anything your agent claims.",
+      "description": "Check your agent's report against its own tool log.",
       "source": "./",
       "category": "productivity"
     }

@@ -41,7 +41,7 @@
 </head>
 <body>
 <header>
-  <h1>metacog</h1><span class="tag">verify anything your agent claims</span>
+  <h1>metacog</h1><span class="tag">checks your agent's report against what it actually did</span>
   <span style="flex:1"></span><div id="egress"></div>
 </header>
 <main>
@@ -71,7 +71,7 @@ async function loadSessions() {
         h("span", {class: "trust", style: "color:" + trustColor(s.trust)}, s.trust == null ? "–" : s.trust)),
       h("div", {class: "cwd"}, s.cwd || ""),
       h("div", {class: "dim", style: "font-size:12px"},
-        `${s.turns} turns · ${s.false_claims} false · ${s.guarded} guarded`));
+        `${s.turns} ${s.turns === 1 ? "turn" : "turns"} · ${s.false_claims} false · ${s.guarded} guarded`));
     el.onclick = () => { selected = s.id; refresh(); };
     return el;
   }));
@@ -89,7 +89,7 @@ function renderVerdict(r) {
       h("div", {class: "dim", style: "margin-left:4px"}, c.explanation, c.evidence && c.evidence.length ? `  (log #${c.evidence.join(", #")})` : ""))),
     (r.findings || []).map((f) => h("div", {class: "row"}, badge(f.severity === "false" ? "false" : "warn", f.check), f.detail)),
     (r.waste || []).map((w) => h("div", {class: "row"}, badge("flag", "waste"), w.detail + (w.tokens ? ` (~${w.tokens.toLocaleString("en-GB")} tokens)` : ""), h("span", {class: "dim"}, " → " + w.tip))),
-    r.error ? h("div", {class: "row warn"}, "verifier error: " + r.error) : null);
+    r.error ? h("div", {class: "row " + (/MODEL_API_KEY/.test(r.error) ? "dim" : "warn")}, /MODEL_API_KEY/.test(r.error) ? "verifier off (no API key): deterministic checks only" : "verifier error: " + r.error) : null);
 }
 
 function renderEvent(r) {
@@ -102,7 +102,7 @@ function renderEvent(r) {
         r.exit_code != null && r.exit_code !== 0 ? h("span", {class: "false"}, ` exit ${r.exit_code}`) : null,
         (r.output || r.content) ? h("pre", {}, (r.kind === "write" ? r.content : r.output).slice(0, 2000)) : null);
       break;
-    case "Guard": body = h("div", {}, badge(r.decision, `${r.decision} · ${r.rule}`), r.reason); break;
+    case "Guard": body = h("div", {}, badge(r.decision, `${r.decision} · ${r.rule}`), r.target ? h("code", {}, r.target) : null, h("div", {class: "dim"}, r.reason)); break;
     case "Stop": body = h("div", {}, badge("flag", "final report"), h("pre", {}, r.message || "")); break;
     case "Verdict": body = renderVerdict(r); break;
     default: return null;

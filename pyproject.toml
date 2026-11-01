@@ -16,3 +16,6 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/metacog"]
+
+[dependency-groups]
+dev = ["pytest"]
