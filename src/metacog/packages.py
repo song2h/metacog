@@ -16,6 +16,7 @@ import json
 import os
 import re
 import shlex
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -33,12 +34,15 @@ VALUE_OPTS = {"-r", "--requirement", "-c", "--constraint", "-e", "--editable", "
               "--python", "-p", "--platform", "--python-version", "--implementation", "--abi", "--log", "--cache-dir", "--report",
               "--only-binary", "--no-binary", "--upgrade-strategy", "--config-settings", "-C", "--progress-bar", "--group", "-G",
               "--optional", "--extra", "--extras", "-E", "--package", "--source", "--tag", "--branch", "--rev", "--bounds",
-              "--workspace", "-w", "--directory", "--project"}
+              "--workspace", "-w", "--directory", "--project", "--trusted-host", "--default-timeout", "--timeout", "--retries",
+              "--use-deprecated", "--use-feature", "--proxy", "--cert", "--client-cert", "--exists-action", "--global-option",
+              "--omit", "--include", "--loglevel", "--filter", "--cwd"}
 FILE_LIKE = re.compile(r"\.(whl|tgz|tar\.gz|tar\.bz2|zip)$", re.I)
 PRIVATE_ENV = ("PIP_INDEX_URL", "PIP_EXTRA_INDEX_URL", "UV_INDEX_URL", "UV_DEFAULT_INDEX", "UV_INDEX", "UV_EXTRA_INDEX_URL",
                "npm_config_registry", "NPM_CONFIG_REGISTRY")
 SEPARATOR = re.compile(r"&&|\|\||[;|\n]")
 NAME = re.compile(r"^(@[a-z0-9][\w.-]*/)?[A-Za-z0-9][\w.-]*$")
+BUDGET = 5  # seconds for all registry lookups of one command; the hook itself is killed at 15
 
 
 def _ecosystem(part: str) -> str:
@@ -83,7 +87,9 @@ def requested(cmd: str, cwd: str = "") -> list[tuple[str, str]]:
             words = shlex.split(part[m.end():])
         except ValueError:
             continue
-        eco, skip = _ecosystem(part), False
+        eco, skip = _ecosystem(m.group()), False
+        if eco == "npm" and any(w in ("-w", "--workspace") or w.startswith("--workspace=") for w in words):
+            continue  # installs into a workspace of this repo: the names are often its sibling packages
         if m.re is RUNNER:
             out += [(eco, n) for n in _runner(words, eco, cwd)]
             continue
@@ -98,7 +104,7 @@ def requested(cmd: str, cwd: str = "") -> list[tuple[str, str]]:
                 continue
             if (name := _name(w, eco)):
                 out.append((eco, name))
-    return out[:5]
+    return out
 
 
 def lookup(eco: str, name: str, timeout: float = 3) -> tuple[bool, float | None] | None:
@@ -120,20 +126,22 @@ def lookup(eco: str, name: str, timeout: float = 3) -> tuple[bool, float | None]
     return True, (calendar.timegm(time.strptime(first[:19], "%Y-%m-%dT%H:%M:%S")) if first else None)  # registry times are UTC
 
 
-def private_index(eco: str, cwd: str = "") -> bool:
-    """A non-default index set outside the command line (env or config file): the names may be internal, so don't look them up."""
+def private_index(eco: str, cwd: str = "", name: str = "") -> bool:
+    """A non-default index set outside the command line (env or config file), or a registry for the name's npm scope
+    (@acme:registry=... in .npmrc): the names may be internal, so don't look them up."""
     if any(os.environ.get(k) for k in PRIVATE_ENV):
         return True
     home = Path.home()
     files = ([home / ".config/pip/pip.conf", home / ".pip/pip.conf", home / "Library/Application Support/pip/pip.conf",
               Path("/etc/pip.conf"), Path(cwd or ".") / "pip.conf", Path(cwd or ".") / "uv.toml", Path(cwd or ".") / "pyproject.toml"]
              if eco == "pypi" else [home / ".npmrc", Path(cwd or ".") / ".npmrc"])
+    scope = f"|{re.escape(name.split('/')[0])}:registry" if name.startswith("@") else ""
     for f in files:
         try:
             text = f.read_text(errors="replace")
         except OSError:
             continue
-        if re.search(r"^\s*(index-url|extra-index-url|registry)\s*=|^\s*\[\[tool\.uv\.index\]\]|^\s*\[\[tool\.poetry\.source\]\]", text, re.M):
+        if re.search(rf"^\s*(index-url|extra-index-url|registry{scope})\s*=|^\s*\[\[tool\.uv\.index\]\]|^\s*\[\[tool\.poetry\.source\]\]", text, re.M):
             return True
     return False
 
@@ -141,20 +149,27 @@ def private_index(eco: str, cwd: str = "") -> bool:
 def check(cmd: str, cfg: dict, cwd: str = "") -> dict | None:
     if not cfg.get("check_packages", True) or not (INSTALL.search(cmd) or RUNNER.search(cmd)):
         return None
-    min_days = cfg.get("new_package_days", 30)
-    for eco, name in requested(cmd, cwd):
-        if private_index(eco, cwd):
-            continue
-        found = lookup(eco, name)
-        if found is None:
-            continue
-        exists, first = found
-        registry = "PyPI" if eco == "pypi" else "npm"
-        if not exists:
+    names = [p for p in dict.fromkeys(requested(cmd, cwd)) if not private_index(p[0], cwd, p[1])]
+    found = {}
+
+    def fetch(p):
+        found[p] = lookup(*p)
+
+    # Every name, in parallel, within one budget; a lookup still running after it counts as "registry not reachable".
+    threads = [threading.Thread(target=fetch, args=(p,), daemon=True) for p in names]
+    for t in threads:
+        t.start()
+    deadline = time.time() + BUDGET
+    for t in threads:
+        t.join(max(0, deadline - time.time()))
+    results = [(name, "PyPI" if eco == "pypi" else "npm", found.get((eco, name))) for eco, name in names]
+    for name, registry, r in results:
+        if r and not r[0]:
             return {"decision": "deny", "rule": "package-missing", "package": name,
                     "reason": f"`{name}` does not exist on {registry}: likely a hallucinated name, and anyone could register it. "
                               f"Check the real package name"}
-        if first and (age := (time.time() - first) / 86400) < min_days:
+    for name, registry, r in results:
+        if r and r[1] and (age := (time.time() - r[1]) / 86400) < cfg.get("new_package_days", 30):
             return {"decision": "ask", "rule": "package-new", "package": name,
                     "reason": f"`{name}` was first published on {registry} {age:.0f} days ago; new names are how hallucinated "
                               f"dependencies get squatted"}
