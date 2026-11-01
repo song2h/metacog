@@ -3,7 +3,7 @@
 Code models name packages that do not exist (on average at least 5.2% for commercial and 21.7% for
 open-source models in Spracklen et al., "We Have a Package for You!", arXiv 2406.10279). Anyone can
 register such a name later and wait for agents to install it ("slopsquatting"). So before
-`pip install` / `npm install` runs, metacog asks the public registry: a missing package is denied,
+`pip install` / `npm install` / `uvx` / `npx` runs, metacog asks the public registry: a missing package is denied,
 a package first published recently needs your approval.
 
 Skipped for private indexes (--index-url, --registry, PIP_INDEX_URL, pip.conf, .npmrc, [[tool.uv.index]] ...) and
@@ -24,6 +24,9 @@ from pathlib import Path
 
 INSTALL = re.compile(r"\b(?:(?:uv\s+)?pip3?(?:\.\d+)?|python3?(?:\.\d+)?\s+-m\s+pip)\s+install\b|\buv\s+add\b|\bpoetry\s+add\b|"
                      r"\b(?:npm|pnpm|bun)\s+(?:install|i|add)\b|\byarn\s+add\b")
+# Commands that fetch a package and run it at once: only the tool's own package is named, the rest are its arguments.
+RUNNER = re.compile(r"\b(?:uvx|uv\s+tool\s+(?:run|install)|pipx\s+(?:run|install)|npx|bunx|(?:pnpm|yarn)\s+dlx)\b")
+RUNNER_PKG_OPTS = {"pypi": {"--from", "--with", "--spec"}, "npm": {"-p", "--package"}}
 CUSTOM_INDEX = re.compile(r"(?:^|\s)(-i|--index-url|--extra-index-url|--index|--default-index|--registry|--find-links)\b|\bpip\S*\s+install\b.*\s-f\b")
 # Options whose next word is a value, not a package (pip, uv, poetry, npm).
 VALUE_OPTS = {"-r", "--requirement", "-c", "--constraint", "-e", "--editable", "--target", "-t", "--prefix", "--root", "--src",
@@ -39,14 +42,41 @@ NAME = re.compile(r"^(@[a-z0-9][\w.-]*/)?[A-Za-z0-9][\w.-]*$")
 
 
 def _ecosystem(part: str) -> str:
-    return "npm" if re.search(r"\b(npm|pnpm|yarn|bun)\b", part) else "pypi"
+    return "npm" if re.search(r"\b(npm|pnpm|yarn|bun|npx|bunx)\b", part) else "pypi"
 
 
-def requested(cmd: str) -> list[tuple[str, str]]:
-    """(ecosystem, name) for every package an install command names on the command line."""
+def _name(w: str, eco: str) -> str | None:
+    name = re.split(r"[=<>!~;\[ ]", w, maxsplit=1)[0]
+    if name.count("@") > (1 if name.startswith("@") else 0):
+        name = name.rsplit("@", 1)[0]  # pkg@1.2, @scope/pkg@1.2, uvx ruff@0.5
+    return name if NAME.match(name) else None
+
+
+def _runner(words: list[str], eco: str, cwd: str) -> list[str]:
+    named, first, skip = [], None, False
+    for i, w in enumerate(words):
+        if skip:
+            skip = False
+            continue
+        opt, _, val = w.partition("=")
+        if opt in RUNNER_PKG_OPTS[eco]:
+            named.append(val or (words[i + 1] if i + 1 < len(words) else ""))
+            skip = not val
+        elif w in VALUE_OPTS and eco == "pypi":
+            skip = True
+        elif not w.startswith("-"):
+            first = w  # the package to run; what follows are its arguments
+            break
+    if not named and first and eco == "npm" and (Path(cwd or ".") / "node_modules/.bin" / first).exists():
+        return []  # npx runs the project's own binary first
+    return [n for w in named or [first] if w and "://" not in w and not w.startswith((".", "/")) and (n := _name(w, eco))]
+
+
+def requested(cmd: str, cwd: str = "") -> list[tuple[str, str]]:
+    """(ecosystem, name) for every package an install or run-a-package command names on the command line."""
     out = []
     for part in SEPARATOR.split(cmd):
-        m = INSTALL.search(part)
+        m = INSTALL.search(part) or RUNNER.search(part)
         if not m or CUSTOM_INDEX.search(part):
             continue
         try:
@@ -54,6 +84,9 @@ def requested(cmd: str) -> list[tuple[str, str]]:
         except ValueError:
             continue
         eco, skip = _ecosystem(part), False
+        if m.re is RUNNER:
+            out += [(eco, n) for n in _runner(words, eco, cwd)]
+            continue
         for w in words:
             if skip:
                 skip = False
@@ -63,10 +96,7 @@ def requested(cmd: str) -> list[tuple[str, str]]:
                 continue
             if w.startswith("-") or "/" in w and not w.startswith("@") or "://" in w or w in (".", "..") or FILE_LIKE.search(w):
                 continue
-            name = re.split(r"[=<>!~;\[ ]", w, maxsplit=1)[0]
-            if eco == "npm" and name.count("@") > (1 if name.startswith("@") else 0):
-                name = name.rsplit("@", 1)[0]  # pkg@1.2 or @scope/pkg@1.2
-            if NAME.match(name):
+            if (name := _name(w, eco)):
                 out.append((eco, name))
     return out[:5]
 
@@ -109,10 +139,10 @@ def private_index(eco: str, cwd: str = "") -> bool:
 
 
 def check(cmd: str, cfg: dict, cwd: str = "") -> dict | None:
-    if not cfg.get("check_packages", True) or not INSTALL.search(cmd):
+    if not cfg.get("check_packages", True) or not (INSTALL.search(cmd) or RUNNER.search(cmd)):
         return None
     min_days = cfg.get("new_package_days", 30)
-    for eco, name in requested(cmd):
+    for eco, name in requested(cmd, cwd):
         if private_index(eco, cwd):
             continue
         found = lookup(eco, name)

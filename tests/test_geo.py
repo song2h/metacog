@@ -28,6 +28,8 @@ def test_ip_and_name_lookup():
     assert geo.host_country("sanmaohe.oss-cn-beijing.aliyuncs.com")[0] == "CN"  # the bucket in the Cohere report
     assert geo.host_country("ark.cn-beijing.volces.com")[0] == "CN" and geo.host_country("bucket.oss-cn-hongkong.aliyuncs.com")[0] == "HK"
     assert geo.host_country("gb4w8c3ygj-default-sea.rum.aliyuncs.com")[0] == "CN-CO"
+    assert geo.host_country("b.oss-cn-beijing-internal.aliyuncs.com")[0] == "CN" and geo.host_country("oss-cn-hongkong-internal.aliyuncs.com")[0] == "HK"
+    assert geo.host_country("s3.cn-north-1.amazonaws.com.cn")[0] == "CN" and geo.host_country("s3.us-east-1.amazonaws.com") is None
     assert geo.host_country("oss-ap-southeast-1.aliyuncs.com") is None and geo.host_country("notdeepseek.com") is None
     assert geo.host_country("example.com") is None
     assert geo.classify("cdn.example.com", ["192.0.2.1", "203.0.113.7"])[0] == "CN"

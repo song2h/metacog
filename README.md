@@ -135,7 +135,7 @@ When the final report claims a deploy and the agent ran a mutating `kubectl`/`he
 
 ## Hallucinated dependencies
 
-Code models name packages that do not exist: at least 5.2% of packages for commercial models and 21.7% for open-source models in a study of 576,000 samples (Spracklen et al., "We Have a Package for You!", arXiv 2406.10279). An attacker can register such a name and wait for agents to install it. Before a `pip`, `uv`, `poetry`, `npm`, `pnpm`, `yarn` or `bun` install command runs, metacog asks the public registry about each package named on the command line (not `npx`/`uvx`, not requirement files):
+Code models name packages that do not exist: at least 5.2% of packages for commercial models and 21.7% for open-source models in a study of 576,000 samples (Spracklen et al., "We Have a Package for You!", arXiv 2406.10279). An attacker can register such a name and wait for agents to install it. Before a `pip`, `uv`, `poetry`, `npm`, `pnpm`, `yarn` or `bun` install runs, and before `uvx`, `uv tool`, `pipx`, `npx`, `bunx` or `dlx` fetches a package to run it, metacog asks the public registry about each package named on the command line (requirement files and lockfiles are not checked; `npx` of a binary already in `node_modules/.bin` is skipped):
 
 - the package does not exist: **denied**, and the agent is told the name is probably made up;
 - it was first published less than `new_package_days` ago (default 30): you are **asked**;
@@ -149,7 +149,7 @@ On 2026-10-26 Cohere reported that an open-weight model (Qwen3.8-Flash-Next), ru
 
 | Code | Meaning | Default |
 |---|---|---|
-| `CN` | destination documented as in mainland China: IP ranges APNIC allocates to CN, cloud endpoints named for a mainland region (`oss-cn-*.aliyuncs.com`, `*.cn-*.volces.com`), and services whose own documents place data there (DeepSeek's privacy policy; DashScope Beijing) | **blocked and logged** |
+| `CN` | destination documented as in mainland China: IP ranges APNIC allocates to CN, cloud endpoints named for a mainland region (`oss-cn-*.aliyuncs.com` including `-internal`, `*.cn-*.volces.com`, AWS China `*.amazonaws.com.cn`), and services whose own documents place data there (DeepSeek's privacy policy; DashScope Beijing) | **blocked and logged** |
 | `CN-CO` | services run by Chinese companies whose servers are elsewhere or not established (Volcano Engine telemetry, ByteDance/Trae, Alibaba RUM used by Qwen Code usage statistics, Moonshot, Zhipu, MiniMax) | logged |
 | `CN-TLD` | any `.cn` name (weak: mirrors and documentation sites use it too) | logged |
 

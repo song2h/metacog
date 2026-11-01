@@ -27,11 +27,12 @@ APNIC_URL = "https://ftp.apnic.net/stats/apnic/delegated-apnic-latest"
 TLDS = {"CN": (".cn",), "HK": (".hk",), "MO": (".mo",)}
 # Cloud endpoints whose name carries a mainland region (oss-cn-beijing.aliyuncs.com, ark.cn-beijing.volces.com).
 # cn-hongkong is Hong Kong. Source for the Beijing OSS upload: Cohere blog, 2026-10-26 (see README).
-REGION_HOST = re.compile(r"(?:^|\.)(?:oss-)?cn-(?!hongkong)[a-z]+(?:-\d+)?\.(?:[a-z0-9-]+\.)?(?:aliyuncs|volces)\.com$")
-HK_REGION_HOST = re.compile(r"(?:^|\.)(?:oss-)?cn-hongkong\.(?:[a-z0-9-]+\.)?aliyuncs\.com$")
+REGION_HOST = re.compile(r"(?:^|\.)(?:oss-)?cn-(?!hongkong)[a-z]+(?:-\d+)?(?:-internal)?\.(?:[a-z0-9-]+\.)?(?:aliyuncs|volces)\.com$")
+HK_REGION_HOST = re.compile(r"(?:^|\.)(?:oss-)?cn-hongkong(?:-internal)?\.(?:[a-z0-9-]+\.)?aliyuncs\.com$")
 # Hostname suffix -> (code, source). "CN" = documented as located in mainland China; "CN-CO" = run by a Chinese company,
 # location outside China or not established. Matched on whole labels.
 DOMAINS: dict[str, tuple[str, str]] = {
+    "amazonaws.com.cn": ("CN", "AWS China regions, Beijing and Ningxia (AWS docs)"),
     "dashscope.aliyuncs.com": ("CN", "Alibaba Model Studio, Beijing region (Alibaba docs)"),
     "cmpassport.com": ("CN-CO", "China Mobile login service found in DeepSeek's web code (Feroot, 2025-02)"),
     "volces.com": ("CN-CO", "Volcano Engine; DeepSeek iOS app telemetry (NowSecure, 2025-02-06)"),

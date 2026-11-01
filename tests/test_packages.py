@@ -53,3 +53,21 @@ def test_hook_returns_the_package_decision(monkeypatch):
     out = hook.handle("claude", {"hook_event_name": "PreToolUse", "session_id": "pk", "tool_name": "Bash",
                                  "tool_input": {"command": "pip install fastapi-auth-helpers"}})
     assert out["hookSpecificOutput"]["permissionDecision"] == "deny" and "hallucinated" in out["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_run_a_package_commands_name_only_the_package(tmp_path):
+    assert packages.requested("uvx ruff check .") == [("pypi", "ruff")]
+    assert packages.requested("uvx -p 3.12 --from 'httpie==3.2' http GET x") == [("pypi", "httpie")]
+    assert packages.requested("uv tool install black@24.1 && pipx run cowsay hi") == [("pypi", "black"), ("pypi", "cowsay")]
+    assert packages.requested("npx -y create-vite@5 app --template react") == [("npm", "create-vite")]
+    assert packages.requested("npx --package=@scope/tool@1 -- tool --x") == [("npm", "@scope/tool")]
+    assert packages.requested("pnpm dlx degit user/repo") == [("npm", "degit")]
+    (tmp_path / "node_modules/.bin").mkdir(parents=True)
+    (tmp_path / "node_modules/.bin/tsc").touch()
+    assert packages.requested("npx tsc --noEmit", str(tmp_path)) == []  # the project's own binary
+    assert packages.requested("npx ./scripts/x.js") == []
+
+
+def test_runner_of_a_missing_package_is_denied(monkeypatch):
+    monkeypatch.setattr(packages, "lookup", lambda eco, name, timeout=3: (False, None))
+    assert packages.check("uvx fastapi-jwt-auth-pro-helpers", CFG)["rule"] == "package-missing"
