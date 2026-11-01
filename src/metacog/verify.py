@@ -238,10 +238,14 @@ def _valid(claims) -> list[dict]:
     return out
 
 
+AGENT_EVENTS = {"UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure", "Stop"}
+
+
 def same_family(turn: list[dict], verifier: str) -> bool:
     """The worker reported a model from the verifier's family (e.g. Muse Code checked by Muse Spark): self-preference risk."""
     family = verifier.split("-")[0].lower()
-    return any(str(r.get("model", "")).lower().split("-")[0] == family for r in turn if r.get("model"))
+    # only the agent's own hook payloads: metacog's Verdict records carry the verifier's model
+    return any(str(r["model"]).lower().split("-")[0] == family for r in turn if r.get("model") and r.get("event") in AGENT_EVENTS)
 
 
 def run(message: str, turn: list[dict], cwd: str, cfg: dict) -> dict:

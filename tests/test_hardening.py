@@ -281,8 +281,10 @@ def test_self_printed_output_and_changes_after_feedback_are_marked():
 
 
 def test_same_family_is_reported():
-    assert verify.same_family([{"model": "muse-spark-1.3-contributor"}], "muse-spark-1.3")
+    assert verify.same_family([{"event": "PostToolUse", "model": "muse-spark-1.3-contributor"}], "muse-spark-1.3")
     assert not verify.same_family([{"event": "Stop"}], "muse-spark-1.3")
+    # a Claude turn re-verified after a bounce-back holds metacog's own earlier Verdict, which names the verifier model
+    assert not verify.same_family([{"event": "PostToolUse"}, {"event": "Verdict", "model": "muse-spark-1.3"}], "muse-spark-1.3")
 
 
 def test_deny_is_not_downgraded_by_an_earlier_ask_rule():
