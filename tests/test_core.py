@@ -184,3 +184,14 @@ def test_waste_tokens_and_project_tips(tmp_path):
     text = optimize.tips(sessions, "/proj")
     assert "2 sessions recorded" in text and "pytest -q" in text and "missing libssl" in text and "$0.007" in text
     assert "No waste pattern" in optimize.tips(sessions, "/other")
+
+
+def test_show_prints_reports_guarded_commands_and_verdicts(capsys):
+    from metacog import cli
+    store.append("s9", {"event": "Guard", "decision": "deny", "rule": "rm-root", "reason": "recursive delete", "target": "rm -rf ~"})
+    store.append("s9", {"event": "Stop", "message": "Done. Pod is 1/1 Running."})
+    store.append("s9", {"event": "Verdict", "trust": 33, "blocked": True,
+                        "claims": [{"verdict": "false", "claim": "Pod is 1/1 Running", "explanation": "re-check: restarts=1"}]})
+    cli.main(["show", "s9"])
+    out = capsys.readouterr().out
+    assert "rm -rf ~" in out and "[report] Done. Pod is 1/1 Running." in out and "false" in out and out.index("[report]") < out.index("[verdict]")

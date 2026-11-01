@@ -277,8 +277,10 @@ def cmd_show(a):
     if not matches:
         sys.exit("no such session")
     for r in store.read(matches[0].stem):
-        if r.get("event") == "Guard":
-            print(f"[guard:{r['decision']}] {r['rule']}: {r['reason']}")
+        if r.get("event") == "Stop" and r.get("message"):
+            print("[report] " + "\n         ".join(r["message"].strip()[:600].splitlines()))
+        elif r.get("event") == "Guard":
+            print(f"[guard:{r['decision']}] {r['rule']}: {r['reason']}" + (f"\n         {r['target']}" if r.get("target") else ""))
         elif r.get("event") == "Verdict":
             print(f"[verdict] trust={r.get('trust')} blocked={r.get('blocked')}")
             for c in r.get("claims", []):
