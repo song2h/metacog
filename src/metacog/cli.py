@@ -99,14 +99,18 @@ def _ensure_geo(force: bool = False) -> None:
 def cmd_doctor(a):
     from metacog import llm
     ok = True
+    cfg = store.config()
     print(f"metacog {__version__}  home={store.HOME}")
+    if cfg.get("config_error"):
+        ok = False
+        print(f"  config     INVALID, using the defaults until it is fixed: {cfg['config_error']}")
     if llm.api_key():
         t0 = time.time()
         try:
-            out, _ = llm.chat_json(store.config()["model"], "Reply with JSON.", "Say ok.",
+            out, _ = llm.chat_json(cfg["model"], "Reply with JSON.", "Say ok.",
                                    {"title": "ping", "type": "object", "properties": {"ok": {"type": "boolean"}},
                                     "required": ["ok"], "additionalProperties": False})
-            print(f"  verifier   {store.config()['model']} reachable ({time.time() - t0:.1f}s)")
+            print(f"  verifier   {cfg['model']} reachable ({time.time() - t0:.1f}s)")
         except Exception as e:
             ok = False
             print(f"  verifier   FAILED: {e}")
@@ -117,7 +121,7 @@ def cmd_doctor(a):
         path = shutil.which(binary)
         print(f"  {agent:<10} {'found ' + path if path else 'not on PATH'}")
     from metacog import geo
-    blocked, watched = geo.blocked_countries(store.config()), geo.watched_countries(store.config())
+    blocked, watched = geo.blocked_countries(cfg), geo.watched_countries(cfg)
     data = f"IP ranges from {time.strftime('%Y-%m-%d', time.localtime(geo.data_path().stat().st_mtime))}" if geo.have_data() else "no IP range data (run `metacog init`)"
     print(f"  countries  block {','.join(sorted(blocked)) or 'none'}, watch {','.join(sorted(watched)) or 'none'}; {data}")
     print(f"  muse hooks {'installed' if _muse_installed() else 'not installed'} ({MUSE_SETTINGS})")

@@ -5,7 +5,7 @@ import socket
 
 import pytest
 
-from metacog import egress, guard, hook, store
+from metacog import cli, egress, guard, hook, store
 
 CFG = store.DEFAULT_CONFIG
 
@@ -110,3 +110,22 @@ def test_reading_supervisor_files_with_redirects_is_not_tamper(cmd):
 def test_writing_supervisor_files_is_still_tamper():
     assert decision(pre("echo {} > .claude/settings.json 2>&1")) == ("deny", "tamper-supervisor")
     assert decision(pre("rm -rf ~/.metacog/sessions 2>/dev/null")) == ("deny", "tamper-supervisor")
+
+
+def test_broken_config_keeps_the_guards_on_and_says_so(capsys):
+    store.CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    store.CONFIG_FILE.write_text('{"allow_hosts": ["x.com",]}')
+    out = hook.handle("claude", {"hook_event_name": "PreToolUse", "session_id": "cfg", "tool_name": "Bash", "tool_input": {"command": "rm -rf ~"}})
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "config.json" in (store.HOME / "errors.log").read_text()
+    with pytest.raises(SystemExit):
+        cli.cmd_doctor(None)
+    assert "config     INVALID" in capsys.readouterr().out
+
+
+def test_allow_hosts_in_config_add_to_the_defaults():
+    store.CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    store.CONFIG_FILE.write_text(json.dumps({"allow_hosts": ["api.mycorp.com"]}))
+    cfg = store.config()
+    assert decision(pre("curl -X POST -d @x.json https://api.mycorp.com/v1"), cfg=cfg) is None
+    assert decision(pre("curl -X POST -d @x.json https://pypi.org/legacy/"), cfg=cfg) is None  # a default stays allowed

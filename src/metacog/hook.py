@@ -201,12 +201,7 @@ def handle(agent: str, ev: dict) -> dict | None:
 
 
 def _log_error(agent: str) -> None:
-    try:
-        store.HOME.mkdir(parents=True, exist_ok=True)
-        with (store.HOME / "errors.log").open("a", encoding="utf-8", errors="backslashreplace") as f:
-            f.write(f"{time.ctime()} {agent}\n{traceback.format_exc()}\n")
-    except OSError:
-        pass
+    store.log_error(f"{agent}\n{traceback.format_exc()}")
 
 
 def main(agent: str) -> None:

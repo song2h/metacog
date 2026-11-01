@@ -24,10 +24,31 @@ DEFAULT_CONFIG = {
 
 
 def config() -> dict:
+    """Defaults plus ~/.metacog/config.json. A broken file must not switch the guards off: it is logged, the defaults apply
+    and "config_error" says why (shown by `metacog doctor`)."""
     cfg = dict(DEFAULT_CONFIG)
-    if CONFIG_FILE.exists():
-        cfg.update(json.loads(CONFIG_FILE.read_text(encoding="utf-8")))
+    try:
+        user = json.loads(CONFIG_FILE.read_text(encoding="utf-8")) if CONFIG_FILE.exists() else {}
+        if not isinstance(user, dict):
+            raise ValueError("expected a JSON object")
+    except (OSError, ValueError) as e:
+        cfg["config_error"] = f"{CONFIG_FILE}: {e}"
+        log_error(f"config: {cfg['config_error']}; using the defaults")
+        return cfg
+    for k, v in user.items():
+        # List settings add to the defaults: allow_hosts ["api.corp.com"] must not drop localhost and the package registries.
+        base = DEFAULT_CONFIG.get(k)
+        cfg[k] = base + [x for x in v if x not in base] if isinstance(base, list) and isinstance(v, list) else v
     return cfg
+
+
+def log_error(text: str) -> None:
+    try:
+        HOME.mkdir(parents=True, exist_ok=True)
+        with (HOME / "errors.log").open("a", encoding="utf-8", errors="backslashreplace") as f:
+            f.write(f"{time.ctime()} {text}\n")
+    except OSError:
+        pass
 
 
 def _safe(sid: str) -> str:
