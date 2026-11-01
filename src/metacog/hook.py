@@ -123,19 +123,29 @@ def redact(text: str) -> str:
     return SECRET_ASSIGN.sub(lambda m: m.group("key") + "[REDACTED]", SECRET_TOKEN.sub("[REDACTED]", text))
 
 
-def _first_time(key: str, window: float = 30) -> bool:
+def _first_time(key: str, window: float) -> bool:
     """True once per key within `window` seconds; dedupes the same hook installed twice (plugin + wrap)."""
     d = store.HOME / "seen"
     d.mkdir(parents=True, exist_ok=True)
     f = d / hashlib.sha256(key.encode("utf-8", "backslashreplace")).hexdigest()[:32]
     try:
         os.close(os.open(f, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
-        return True
     except FileExistsError:
-        if time.time() - f.stat().st_mtime > window:
-            f.touch()
-            return True
-        return False
+        try:
+            if time.time() - f.stat().st_mtime <= window:
+                return False
+        except FileNotFoundError:
+            pass  # swept as stale by another hook just now
+        f.touch()
+        return True
+    if f.name.startswith("0"):  # about one new marker in 16 sweeps out the stale ones, so seen/ stays small
+        for old in d.iterdir():
+            try:
+                if time.time() - old.stat().st_mtime > 60:
+                    old.unlink()
+            except OSError:
+                pass
+    return True
 
 
 def _event_key(rec: dict) -> str:
@@ -153,7 +163,9 @@ def _safe_append(sid: str, rec: dict) -> None:
 def handle(agent: str, ev: dict) -> dict | None:
     """Record the event and return the JSON decision to print, if any."""
     rec = normalize(agent, ev)
-    if rec is None or not _first_time(_event_key(rec)):
+    # Both copies of a hook installed twice fire at once. Without a tool_use_id the key is the text itself, so the
+    # window stays short: the user typing "continue" again, or the same final message in a new turn, is a new event.
+    if rec is None or not _first_time(_event_key(rec), window=30 if rec.get("tool_use_id") else 2):
         return None
     for k in TEXT_FIELDS:
         if isinstance(rec.get(k), str):
