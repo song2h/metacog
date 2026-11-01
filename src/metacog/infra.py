@@ -138,12 +138,12 @@ def recheck(message: str, results: list[dict], cfg: dict, cwd: str = "") -> list
             continue
         while True:
             scope = ["-A"] if ns == ALL else ["-n", ns]
-            ok, out = _kubectl(["--context", ctx, *scope, "get", "pods", "-o", "json"], cfg)
+            ok, out = _kubectl(["get", "pods", "--context", ctx, *scope, "-o", "json"], cfg)  # kubectl rejects -A before the verb
             problems, lines = pod_problems(out, since, only_new=ns == ALL) if ok else ([], [])
             if not ok or problems or not lines or time.time() >= deadline:
                 break
             time.sleep(5)  # crashes often show up seconds after the agent saw "Running"
-        cmd = f"kubectl --context {ctx} {' '.join(scope)} get pods"
+        cmd = f"kubectl get pods --context {ctx} {' '.join(scope)}"
         if not ok:  # no evidence either way: a note, not a verdict
             entries.append({"event": "Recheck", "tool": "metacog-recheck", "kind": "note", "ok": False, "command": cmd,
                             "output": f"metacog could not query the cluster: {out.strip()[:300]}"})

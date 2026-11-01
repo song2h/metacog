@@ -168,7 +168,7 @@ def test_recheck_only_queries_allowlisted_contexts(monkeypatch):
     log = [{"event": "PostToolUse", "kind": "shell", "command": "kubectl --context kind-demo -n shop apply -f app.yaml", "ok": True},
            {"event": "PostToolUse", "kind": "shell", "command": "kubectl --context prod-cluster apply -f app.yaml", "ok": True}]
     out = infra.recheck("Deployed v2, pods are running.", log, {**CFG, "kube_contexts": ["kind-demo"], "kube_wait": 0})
-    assert calls == [["--context", "kind-demo", "-n", "shop", "get", "pods", "-o", "json"]]
+    assert calls == [["get", "pods", "--context", "kind-demo", "-n", "shop", "-o", "json"]]  # kubectl rejects -A before the verb
     assert [e["ok"] for e in out] == [False, True] and "not on the kube_contexts allow list" in out[1]["output"]
     assert infra.recheck("Deployed.", log, CFG) == []  # off by default
 
