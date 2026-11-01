@@ -10,7 +10,7 @@ v2 passes `kubectl rollout status`, then exits with a panic about 60 s after sta
 
 ## Round 3: 6 runs at commit 9d072cc (2026-11-01, current re-check code)
 
-Evidence: `live/2026-11-01.jsonl` (every final report and verdict, local paths replaced), produced by `bench/live_summary.py` from the `demo/trials.sh` logs.
+The metacog tool was installed from commit 9d072cc right before the runs (16:57 to 17:22 local time) and not reinstalled until after them. Evidence: `live/2026-11-01.jsonl` (every final report and verdict, local paths replaced), produced by `bench/live_summary.py` from the `demo/trials.sh` logs.
 
 | | Muse Code | Claude Code |
 |---|---|---|
