@@ -49,16 +49,18 @@ WRAPPERS = {"sudo", "doas", "env", "time", "nice", "nohup", "command", "exec"}
 WRAPPER_VALUE_OPTS = {"-u", "-g", "-U", "-C", "-D", "-h", "-p", "-r", "-t"}  # sudo -u root, env -u NAME
 PROXY_BYPASS = re.compile(r"\bunset\s+[^;&|]*\b(https?|all)_proxy\b|\b(https?|all)_proxy=\s*(['\"]['\"])?(\s|$)|--noproxy\b|--no-proxy\b", re.I)
 
+# Global options before a subcommand: git -C repo push, helm --kube-context ctx uninstall, terraform -chdir=infra apply.
+OPTS = r"(?:\s+-\S+(?:\s+[^-\s]\S*)?)*"
 # (rule, pattern, decision, reason) checked against shell commands with quotes and braces removed
 COMMAND_RULES = [
     ("disk-wipe", re.compile(r"\b(mkfs(\.\w+)?|dd\s+if=.*\sof=/dev/(disk|sd|nvme))"), "deny", "formats or overwrites a disk"),
     ("find-delete-home", re.compile(r"\bfind\s+(/|~|\$HOME)/?\s.*-delete\b"), "deny", "deletes files across the root or home directory"),
     ("pipe-to-shell", re.compile(r"\b(curl|wget)\b[^|]*\|\s*(sudo\s+)?(ba|z)?sh\b"), "ask", "pipes a remote script into a shell"),
-    ("force-push", re.compile(r"\bgit\s+push\b.*(\s--force(-with-lease)?\b|\s-[a-zA-Z]*f[a-zA-Z]*\b|\s\+[\w./-]+)"), "ask", "force-pushes and can overwrite remote history"),
-    ("git-reset-hard", re.compile(r"\bgit\s+(reset\s+--hard|clean\s+-[a-zA-Z]*f)"), "ask", "discards local changes"),
+    ("force-push", re.compile(rf"\bgit{OPTS}\s+push\b.*(\s--force(-with-lease)?\b|\s-[a-zA-Z]*f[a-zA-Z]*\b|\s\+[\w./-]+)"), "ask", "force-pushes and can overwrite remote history"),
+    ("git-reset-hard", re.compile(rf"\bgit{OPTS}\s+(reset\s+--hard|clean\s+-[a-zA-Z]*f)"), "ask", "discards local changes"),
     ("kubectl-delete", re.compile(r"\bkubectl\b.*\s(delete|drain)\b"), "ask", "deletes Kubernetes resources"),
-    ("terraform", re.compile(r"\bterraform\s+(apply|destroy)\b"), "ask", "changes real infrastructure"),
-    ("helm-uninstall", re.compile(r"\bhelm\s+(uninstall|delete)\b"), "ask", "removes a Helm release"),
+    ("terraform", re.compile(rf"\b(terraform|tofu){OPTS}\s+(apply|destroy)\b"), "ask", "changes real infrastructure"),
+    ("helm-uninstall", re.compile(rf"\bhelm{OPTS}\s+(uninstall|delete)\b"), "ask", "removes a Helm release"),
     ("sql-drop", re.compile(r"\b(DROP\s+(TABLE|DATABASE|SCHEMA)|TRUNCATE\s+TABLE)\b", re.I), "ask", "drops or truncates database objects"),
     ("publish", re.compile(r"\b(npm|pnpm|yarn)\s+publish\b|\btwine\s+upload\b|\bcargo\s+publish\b"), "ask", "publishes a package"),
     # Seen live: told its deploy was crashing, an agent rebuilt the release image without the failing code and reloaded it under the same tag.
