@@ -115,12 +115,19 @@ SECRET_TOKEN = re.compile(
 SECRET_ASSIGN = re.compile(
     r"(?i)(?P<key>(?:api[_-]?key|secret[_-]?(?:access[_-]?)?key|client[_-]?secret|token|passw(?:or)?d|authorization)"
     r"[\"']?\s*[:=]\s*(?:bearer\s+)?[\"']?)[^\s\"',;]{8,}")
+URL_CREDENTIAL = re.compile(r"(?P<key>\b[a-z][a-z0-9+.-]*://[^/\s:@'\"]+:)[^/\s@'\"]+(?=@)", re.I)  # postgres://admin:PW@db
+CLI_CREDENTIAL = re.compile(r"(?P<key>(?:\s-u\s*|\s--user[=\s]\s*)['\"]?[^\s:'\"]+:|"  # curl -u user:PW
+                            r"\b(?:mysql|mysqldump|mysqladmin|mariadb)\b[^;&|\n]*?\s-p|"  # mysql -pPW
+                            r"--password(?:=|\s+(?!-))['\"]?)[^\s'\"]+")
 TEXT_FIELDS = ("command", "content", "output", "prompt", "message", "url")
 
 
 def redact(text: str) -> str:
     """Mask credentials before anything is stored or sent to the verifier."""
-    return SECRET_ASSIGN.sub(lambda m: m.group("key") + "[REDACTED]", SECRET_TOKEN.sub("[REDACTED]", text))
+    text = SECRET_TOKEN.sub("[REDACTED]", text)
+    for pattern in (SECRET_ASSIGN, URL_CREDENTIAL, CLI_CREDENTIAL):
+        text = pattern.sub(lambda m: m.group("key") + "[REDACTED]", text)
+    return text
 
 
 def _first_time(key: str, window: float) -> bool:

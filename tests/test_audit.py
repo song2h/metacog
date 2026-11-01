@@ -167,3 +167,17 @@ def test_stale_dedupe_markers_are_swept():
         hook.handle("claude", {"hook_event_name": "PostToolUse", "session_id": "sw", "tool_name": "Bash", "tool_use_id": f"t{i}",
                                "tool_input": {"command": "ls"}, "tool_response": {"stdout": ""}})
     assert not list(seen.glob("stale*"))
+
+
+@pytest.mark.parametrize("raw,redacted", [
+    ("psql postgres://admin:pw@db:5432/app", "psql postgres://admin:[REDACTED]@db:5432/app"),
+    ("git clone https://oauth2:glpat-xxxxxxxx@gitlab.com/a/b.git", "git clone https://oauth2:[REDACTED]@gitlab.com/a/b.git"),
+    ("curl -u user:hunter2 https://api.example.com", "curl -u user:[REDACTED] https://api.example.com"),
+    ("mysql -u root -pS3cret app", "mysql -u root -p[REDACTED] app"),
+    ("mysqldump --password=hunter2 app", "mysqldump --password=[REDACTED] app"),
+    ("curl https://host.example.com:8443/path && mkdir -p out && git push -u origin main", None),
+])
+def test_credentials_in_urls_and_cli_flags_are_redacted(raw, redacted):
+    assert hook.redact(raw) == (redacted or raw)
+    hook.handle("claude", {"hook_event_name": "PreToolUse", "session_id": "red", "tool_name": "Bash", "tool_input": {"command": raw}})
+    assert [r["command"] for r in store.read("red") if r["event"] == "PreToolUse"] == [redacted or raw]
