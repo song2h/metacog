@@ -10,6 +10,8 @@ This is pattern matching, not a sandbox: it raises the cost of mistakes and of o
 exfiltration. The egress proxy (enforce mode) is the backstop for traffic hidden in scripts.
 """
 
+import itertools
+import os
 import re
 import shlex
 
@@ -33,6 +35,9 @@ SUPERVISOR_FILES = re.compile(r"\.claude/settings(\.local)?\.json|\.claude/plugi
 WRITES_FILE = re.compile(r"(>|\btee\b|\bsed\s+-i|\brm\b|\bmv\b|\bcp\b|\bln\b|\btruncate\b|open\(|write|unlink|remove|rename|json\.dump|chmod)")
 SUPERVISOR_CMDS = re.compile(r"\bmetacog\s+(uninstall|install)\b|\bclaude\s+plugins?\s+(uninstall|disable|remove)\b|"
                              r"\b(uv\s+tool|pipx|pip3?)\s+uninstall\s+(-y\s+)?metacog\b|\b(pkill|killall)\b.*\bmetacog\b")
+SHELLS = {"sh", "bash", "zsh", "dash", "ksh"}
+WRAPPERS = {"sudo", "doas", "env", "time", "nice", "nohup", "command", "exec"}
+WRAPPER_VALUE_OPTS = {"-u", "-g", "-U", "-C", "-D", "-h", "-p", "-r", "-t"}  # sudo -u root, env -u NAME
 PROXY_BYPASS = re.compile(r"\bunset\s+[^;&|]*\b(https?|all)_proxy\b|\b(https?|all)_proxy=\s*(['\"]['\"])?(\s|$)|--noproxy\b|--no-proxy\b", re.I)
 
 # (rule, pattern, decision, reason) checked against shell commands with quotes and braces removed
@@ -69,21 +74,44 @@ def read_secrets_before(history: list[dict]) -> list[str]:
     return [r.get("target", "") for r in history if r.get("event") == "Guard" and r.get("rule") == "secret-read"]
 
 
+def _commands(cmd: str) -> list[list[str]]:
+    """The words of each simple command, with sudo/env/time-style wrappers dropped and `sh -c '...'` unpacked."""
+    try:
+        lex = shlex.shlex(cmd.replace("\n", ";"), posix=True, punctuation_chars=";&|()")
+        lex.whitespace_split = True
+        tokens = list(lex)
+    except ValueError:
+        tokens = re.sub(r"([;&|()])", r" \1 ", cmd.replace("\n", ";")).split()
+    out, words = [], []
+    for t in tokens + [";"]:
+        if not set(t) <= set(";&|()"):
+            words.append(t)
+            continue
+        while words and (os.path.basename(words[0]) in WRAPPERS or re.match(r"\w+=", words[0])):
+            words.pop(0)
+            while words and words[0].startswith("-"):
+                if words.pop(0) in WRAPPER_VALUE_OPTS and words:
+                    words.pop(0)
+        if words:
+            words[0] = os.path.basename(words[0])
+            opts = list(itertools.takewhile(lambda w: w.startswith("-"), words[1:]))
+            if words[0] in SHELLS and any(re.fullmatch(r"-[a-z]*c[a-z]*", o) for o in opts):
+                out += _commands(" ".join(words[1 + len(opts):]))
+            else:
+                out.append(words)
+        words = []
+    return out
+
+
 def _rm_root(cmd: str) -> bool:
-    """rm with a recursive flag aimed at /, ~ or $HOME, in any flag spelling."""
-    for seg in re.split(r"[;&|]+", cmd):
-        try:
-            words = shlex.split(seg)
-        except ValueError:
-            words = seg.split()
-        while words and words[0] in ("sudo", "command", "nice", "nohup"):
-            words = words[1:]
-        if not words or words[0] not in ("rm", "/bin/rm"):
+    """rm with a recursive flag aimed at /, ~, $HOME or a home directory, in any flag spelling."""
+    for words in _commands(cmd):
+        if words[0] != "rm":
             continue
         flags = [w for w in words[1:] if w.startswith("-")]
         targets = [w for w in words[1:] if not w.startswith("-")]
         recursive = any(f == "--recursive" or (not f.startswith("--") and re.search(r"[rR]", f)) for f in flags)
-        if recursive and any(re.fullmatch(r"(/|~|\$HOME|\$\{HOME\})/?\*?", t) for t in targets):
+        if recursive and any(re.fullmatch(r"(/|~|\$HOME|\$\{HOME\}|/Users/[^/]+|/home/[^/]+)/?\*?", t) for t in targets):
             return True
     return False
 
