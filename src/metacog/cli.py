@@ -276,18 +276,24 @@ def cmd_show(a):
     matches = [p for p in store.sessions() if p.stem.startswith(a.session or "")]  # newest first
     if not matches:
         sys.exit("no such session")
+    report = None
     for r in store.read(matches[0].stem):
         if r.get("event") == "Stop" and r.get("message"):
-            print("[report] " + "\n         ".join(r["message"].strip()[:600].splitlines()))
-        elif r.get("event") == "Guard":
+            report = "[report] " + "\n         ".join(r["message"].strip()[:600].splitlines())
+            if not a.sent_back:
+                print(report)
+        elif r.get("event") == "Guard" and not a.sent_back:
             print(f"[guard:{r['decision']}] {r['rule']}: {r['reason']}" + (f"\n         {r['target']}" if r.get("target") else ""))
-        elif r.get("event") == "Verdict":
+        elif r.get("event") == "Verdict" and (r.get("blocked") or not a.sent_back):
+            if a.sent_back and report:
+                print(report)
             print(f"[verdict] trust={r.get('trust')} blocked={r.get('blocked')}")
             for c in r.get("claims", []):
-                print(f"   {c['verdict']:<13} {c['claim']}  — {c['explanation']}")
+                if not a.sent_back or c["verdict"] != "verified":
+                    print(f"   {c['verdict']:<13} {c['claim']}  — {c['explanation']}")
             for f in r.get("findings", []):
                 print(f"   {f['severity']:<13} {f['detail']}")
-            for w in r.get("waste", []):
+            for w in r.get("waste", []) if not a.sent_back else []:
                 print(f"   waste         {w['detail']} (~{w.get('tokens', 0):,} tokens) → {w['tip']}")
 
 
@@ -333,6 +339,7 @@ def main(argv=None):
     s.set_defaults(fn=cmd_sessions)
     s = sub.add_parser("show", help="print verdicts and guard decisions for a session")
     s.add_argument("session", nargs="?", help="session id or prefix (default: the latest session)")
+    s.add_argument("--sent-back", action="store_true", help="only the reports metacog sent back, with their unverified claims")
     s.set_defaults(fn=cmd_show)
 
     s = sub.add_parser("tips", help="draft CLAUDE.md / AGENTS.md lines from waste that repeats across a project's sessions")

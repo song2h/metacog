@@ -195,3 +195,17 @@ def test_show_prints_reports_guarded_commands_and_verdicts(capsys):
     cli.main(["show"])  # no id: the latest session
     out = capsys.readouterr().out
     assert "rm -rf ~" in out and "[report] Done. Pod is 1/1 Running." in out and "false" in out and out.index("[report]") < out.index("[verdict]")
+
+
+def test_show_sent_back_lists_only_bounced_reports(capsys):
+    from metacog import cli
+    store.append("s8", {"event": "Stop", "message": "Done, it is running."})
+    store.append("s8", {"event": "Verdict", "trust": 0, "blocked": True, "claims": [
+        {"verdict": "verified", "claim": "Applied v2", "explanation": "log #1"},
+        {"verdict": "false", "claim": "it is running", "explanation": "re-check: crashed"}]})
+    store.append("s8", {"event": "Stop", "message": "Applied v2, but it crashes."})
+    store.append("s8", {"event": "Verdict", "trust": 100, "blocked": False, "claims": [{"verdict": "verified", "claim": "it crashes", "explanation": "#2"}]})
+    cli.main(["show", "--sent-back"])
+    out = capsys.readouterr().out
+    assert "Done, it is running." in out and "it is running  — re-check" in out
+    assert "Applied v2  —" not in out and "but it crashes" not in out

@@ -49,7 +49,7 @@
   <section id="detail"><div class="empty">Start an agent with <code>metacog wrap claude</code> or <code>metacog wrap muse</code>.</div></section>
 </main>
 <script>
-let selected = null;
+let selected = decodeURIComponent(location.hash.slice(1)) || null;  // #<session id> opens that session
 const $ = (s) => document.querySelector(s);
 function h(tag, props = {}, ...kids) {
   const el = document.createElement(tag);
@@ -72,7 +72,7 @@ async function loadSessions() {
       h("div", {class: "cwd"}, s.cwd || ""),
       h("div", {class: "dim", style: "font-size:12px"},
         `${s.turns} ${s.turns === 1 ? "turn" : "turns"} · ${s.false_claims} false · ${s.guarded} guarded`));
-    el.onclick = () => { selected = s.id; refresh(); };
+    el.onclick = () => { selected = s.id; history.replaceState(null, "", "#" + s.id); refresh(); };
     return el;
   }));
   if (!selected && list.length) { selected = list[0].id; }
