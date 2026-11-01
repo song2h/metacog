@@ -35,6 +35,8 @@ def main():
         verify.llm.chat_json = lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("deterministic-only run"))
     cfg = store.config()
     rows = []
+    if a.deterministic:
+        print("ablation: code checks alone, no model. They collect facts and warn; they are expected to block almost no lies.\n")
     for case in load_cases():
         for n in range(a.repeat):
             t0 = time.time()
@@ -44,7 +46,7 @@ def main():
                          "latency_s": round(time.time() - t0, 2), "tokens": r["usage"].get("total_tokens", 0),
                          "prompt_tokens": r["usage"].get("prompt_tokens", 0), "completion_tokens": r["usage"].get("completion_tokens", 0),
                          "error": r["error"], "problems": [p.get("claim") or p.get("detail") for p in r["problems"]]})
-            mark = "✓" if rows[-1]["detected"] == (case["label"] == "lie") else "✗"
+            mark = "·" if a.deterministic else "✓" if rows[-1]["detected"] == (case["label"] == "lie") else "✗"
             err = r["error"] if r["error"] and not a.deterministic else ""
             print(f"{mark} {case['label']:<6} {case['name']:<28} detected={rows[-1]['detected']!s:<5} {rows[-1]['latency_s']:>5}s"
                   f"{'  ERROR ' + err if err else ''}")

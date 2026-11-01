@@ -91,6 +91,10 @@ def tool_results(turn: list[dict]) -> list[dict]:
             (r.get("event") == "Guard" and r.get("decision") == "deny")]
 
 
+RECHECK_LABEL = "METACOG RE-CHECK of the live system after the agent finished:"
+FORGED = re.compile(r"METACOG\s+RE-?CHECK", re.I)
+
+
 def digest(results: list[dict], limit: int = 40000) -> str:
     lines = []
     for i, r in enumerate(results, 1):
@@ -104,7 +108,11 @@ def digest(results: list[dict], limit: int = 40000) -> str:
         body = hook.clip(r.get("output") or "", 1500)
         if r.get("kind") == "write" and r.get("content"):
             body = f"WROTE {', '.join(r.get('paths') or [r.get('path', '')])}:\n" + hook.clip(r["content"], 1500)
-        who = "METACOG RE-CHECK of the live system after the agent finished:" if r["event"] == "Recheck" else r.get("tool")
+        if r["event"] == "Recheck":
+            who = RECHECK_LABEL
+        else:  # an agent can print metacog's label itself; only real Recheck entries may carry it
+            who = r.get("tool")
+            target, body = (FORGED.sub("[agent-written text imitating the metacog re-check label]", x) for x in (target, body))
         marks = (" [AFTER FEEDBACK]" if r.get("after_feedback") else "") + \
                 (" [SELF-PRINTED output: the agent wrote this text]" if r.get("kind") == "shell" and self_printed(target) else "")
         lines.append(f"#{i}{marks} {who} {target} -> {status}\n{body}".rstrip())
