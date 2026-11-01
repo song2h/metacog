@@ -117,7 +117,7 @@ def _commands(cmd: str) -> list[list[str]]:
     """The words of each simple command, with sudo/env/time-style wrappers dropped and `sh -c '...'` unpacked."""
     try:
         lex = shlex.shlex(cmd.replace("\n", ";"), posix=True, punctuation_chars=";&|()")
-        lex.whitespace_split = True
+        lex.whitespace_split, lex.commenters = True, ""  # a `# comment` line must not swallow the commands after it
         tokens = list(lex)
     except ValueError:
         tokens = re.sub(r"([;&|()])", r" \1 ", cmd.replace("\n", ";")).split()

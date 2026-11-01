@@ -24,7 +24,8 @@ def decision(rec, history=(), cfg=CFG):
 
 
 @pytest.mark.parametrize("cmd", ["bash -c 'rm -rf ~'", 'sh -c "rm -rf /"', "/usr/bin/rm -rf ~", "env rm -rf ~", "time rm -rf ~",
-                                 "sudo -u root rm -rf /", "rm -rf /Users/alice", "rm -rf /home/bob/", ["bash", "-lc", "rm -rf ~"]])
+                                 "sudo -u root rm -rf /", "rm -rf /Users/alice", "rm -rf /home/bob/", ["bash", "-lc", "rm -rf ~"],
+                                 "# clean up\nrm -rf ~"])
 def test_wrapped_rm_of_root_or_home_is_denied(cmd):
     assert decision(pre(cmd)) == ("deny", "rm-root")
 
