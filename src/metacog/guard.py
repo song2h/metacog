@@ -51,6 +51,7 @@ PROXY_BYPASS = re.compile(r"\bunset\s+[^;&|]*\b(https?|all)_proxy\b|\b(https?|al
 
 # Global options before a subcommand: git -C repo push, helm --kube-context ctx uninstall, terraform -chdir=infra apply.
 OPTS = r"(?:\s+-\S+(?:\s+[^-\s]\S*)?)*"
+CONNECTS = re.compile(rf"\b(ssh|ping)\b|\bgit{OPTS}\s+(clone|fetch|pull|push|ls-remote)\b")
 # (rule, pattern, decision, reason) checked against shell commands with quotes and braces removed
 COMMAND_RULES = [
     ("disk-wipe", re.compile(r"\b(mkfs(\.\w+)?|dd\s+if=.*\sof=/dev/(disk|sd|nvme))"), "deny", "formats or overwrites a disk"),
@@ -154,8 +155,12 @@ def _rm_root(cmd: str) -> bool:
 
 
 def _country_decision(text: str, cfg: dict, source: str) -> dict | None:
-    """Destinations in watched countries: deny when the country is blocked, otherwise flag."""
-    targets = hosts(text) + (geo.IP_LITERAL.findall(text) if NET_TOOLS.search(text) or re.search(r"\b(ssh|ping|git)\b", text) else [])
+    """Destinations in watched countries that this connects to: deny when the country is blocked, otherwise flag.
+    A URL that is only mentioned (grep, sed, a commit message, a string in an edited file) is not a connection;
+    the egress proxy sees what runs later."""
+    if not (NET_TOOLS.search(text) or CONNECTS.search(text)):
+        return None
+    targets = hosts(text) + geo.IP_LITERAL.findall(text)
     hits = {h: hit for h in targets if (hit := geo.host_country(h)) and hit[0] in geo.watched_countries(cfg)}
     if not hits:
         return None
@@ -233,6 +238,9 @@ def check(rec: dict, history: list[dict], cfg: dict) -> dict | None:
             return net
         if SECRET_PATHS.search(cmd):
             return {"decision": "flag", "rule": "secret-read", "reason": "reads secret material", "target": cmd[:200]}
+
+    if rec.get("url"):  # a URL tool (WebFetch) connects like `curl <url>` would: same host and country rules
+        return _network_decision(f"curl {rec['url']}", history, cfg, source=rec.get("tool") or "fetch")
 
     if kind == "read" and any(SECRET_PATHS.search(p) for p in paths):
         return {"decision": "flag", "rule": "secret-read", "reason": f"reads secret file {paths[0]}", "target": paths[0]}

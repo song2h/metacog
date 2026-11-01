@@ -95,6 +95,8 @@ def normalize(agent: str, ev: dict) -> dict | None:
         rec.update(tool=tool, kind=_kind(tool, inp), tool_use_id=ev.get("tool_use_id"),
                    command=" ".join(cmd) if isinstance(cmd, list) else _text(cmd),
                    path=(_paths(inp) or [""])[0], paths=_paths(inp), content=clip(_written(inp)))
+        if isinstance(inp.get("url"), str):  # WebFetch and other tools that fetch a URL themselves
+            rec["url"] = inp["url"]
         if event != "PreToolUse":
             ok, code, out = _result(event, ev)
             rec.update(ok=ok, exit_code=code, output=clip(out), output_len=len(out))
@@ -113,7 +115,7 @@ SECRET_TOKEN = re.compile(
 SECRET_ASSIGN = re.compile(
     r"(?i)(?P<key>(?:api[_-]?key|secret[_-]?(?:access[_-]?)?key|client[_-]?secret|token|passw(?:or)?d|authorization)"
     r"[\"']?\s*[:=]\s*(?:bearer\s+)?[\"']?)[^\s\"',;]{8,}")
-TEXT_FIELDS = ("command", "content", "output", "prompt", "message")
+TEXT_FIELDS = ("command", "content", "output", "prompt", "message", "url")
 
 
 def redact(text: str) -> str:

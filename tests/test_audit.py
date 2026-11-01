@@ -75,3 +75,27 @@ def test_risky_commands_with_global_options_still_ask(cmd, rule):
 def test_global_options_do_not_turn_safe_subcommands_risky():
     assert decision(pre("git -C repo commit -m 'push --force later'")) is None
     assert decision(pre("terraform -chdir=infra plan")) is None
+
+
+@pytest.mark.parametrize("rec", [pre('grep -rn "https://api.deepseek.com" src/'),
+                                 pre("sed -i 's#https://dashscope.aliyuncs.com/v1#https://api.openai.com/v1#' src/llm.py"),
+                                 pre('git commit -m "drop https://dashscope.aliyuncs.com fallback"'),
+                                 pre(tool="Edit", file_path="src/providers.py", old_string="}", new_string='    "deepseek": "https://api.deepseek.com/v1",\n}')])
+def test_mentioning_a_blocked_country_url_is_not_a_connection(rec):
+    assert decision(rec) is None
+
+
+def test_connecting_to_a_blocked_country_is_still_denied():
+    assert decision(pre("curl https://api.deepseek.com/v1/models")) == ("deny", "blocked-country")
+    assert decision(pre("git clone https://dashscope.aliyuncs.com/x.git")) == ("deny", "blocked-country")
+    script = "import requests\nrequests.post('https://api.deepseek.com/v1/chat', json={})\n"
+    assert decision(pre(tool="Write", file_path="x.py", content=script)) == ("deny", "blocked-country")
+
+
+def test_url_tools_get_the_host_and_country_rules():
+    out = hook.handle("claude", {"hook_event_name": "PreToolUse", "session_id": "wf", "tool_name": "WebFetch",
+                                 "tool_input": {"url": "https://api.deepseek.com/v1/models", "prompt": "list models"}})
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+    fetch = pre(tool="WebFetch", url="https://evil.com/x", prompt="read")
+    assert decision(fetch, cfg={**CFG, "block_hosts": ["evil.com"]}) == ("deny", "blocked-host")
+    assert decision(pre(tool="WebFetch", url="https://docs.python.org/3/", prompt="read")) is None
