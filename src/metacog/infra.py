@@ -88,18 +88,19 @@ def targets(results: list[dict], cfg: dict, cwd: str = "") -> set[tuple[str, str
     return out
 
 
-def _created(pod: dict) -> float:
+def _ts(stamp: str | None) -> float:
     try:
-        return datetime.fromisoformat(pod["metadata"]["creationTimestamp"].replace("Z", "+00:00")).timestamp()
-    except (KeyError, ValueError):
+        return datetime.fromisoformat(stamp.replace("Z", "+00:00")).timestamp()
+    except (AttributeError, ValueError):
         return 0.0
 
 
 def pod_problems(pods_json: str, since: float | None = None, only_new: bool = False) -> tuple[list[str], list[str]]:
     """(problem lines, all pod lines) from `kubectl get pods -o json`. With `since`, only pods created after it
-    count when there are any (or always, with only_new): old restarts of untouched pods say nothing about this deploy."""
+    count when there are any (or always, with only_new), and a restart counts only if it happened after `since`:
+    old restarts of untouched pods say nothing about this deploy. A container crashing now always counts."""
     pods = [p for p in json.loads(pods_json).get("items", []) if not p["metadata"].get("deletionTimestamp")]  # skip replicas on their way out
-    if since and ((new := [p for p in pods if _created(p) >= since]) or only_new):
+    if since and ((new := [p for p in pods if _ts(p["metadata"].get("creationTimestamp")) >= since]) or only_new):
         pods = new
     elif only_new:
         pods = []
@@ -109,10 +110,14 @@ def pod_problems(pods_json: str, since: float | None = None, only_new: bool = Fa
         for cs in pod.get("status", {}).get("containerStatuses", []) or []:
             state = cs.get("state", {})
             reason = (state.get("waiting") or state.get("terminated") or {}).get("reason") or ("Running" if "running" in state else "?")
-            last = (cs.get("lastState", {}).get("terminated") or {}).get("reason")
+            last_exit = cs.get("lastState", {}).get("terminated") or {}
+            last = last_exit.get("reason")
             line = f"{name}/{cs['name']}: {reason}, ready={cs.get('ready')}, restarts={cs.get('restartCount', 0)}" + (f", last exit: {last}" if last else "")
             lines.append(line)
-            if reason in BAD_REASONS or cs.get("restartCount", 0) > 0 or last in BAD_REASONS:
+            restarted_at = max(_ts(last_exit.get("finishedAt")), _ts((state.get("running") or {}).get("startedAt")),
+                               _ts(pod["metadata"].get("creationTimestamp")))
+            restarted = cs.get("restartCount", 0) > 0 or last in BAD_REASONS
+            if reason in BAD_REASONS or restarted and (not since or restarted_at >= since):
                 problems.append(line)
     return problems, lines
 

@@ -7,7 +7,7 @@ import time
 
 import pytest
 
-from metacog import cli, egress, guard, hook, store, verify
+from metacog import cli, egress, guard, hook, infra, store, verify
 
 CFG = store.DEFAULT_CONFIG
 
@@ -181,3 +181,18 @@ def test_credentials_in_urls_and_cli_flags_are_redacted(raw, redacted):
     assert hook.redact(raw) == (redacted or raw)
     hook.handle("claude", {"hook_event_name": "PreToolUse", "session_id": "red", "tool_name": "Bash", "tool_input": {"command": raw}})
     assert [r["command"] for r in store.read("red") if r["event"] == "PreToolUse"] == [redacted or raw]
+
+
+def test_a_restart_before_the_deploy_does_not_make_an_untouched_pod_unhealthy():
+    iso = lambda t: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t))
+    now = time.time()
+
+    def pod(crashed_at):
+        return {"metadata": {"name": "api-0", "creationTimestamp": iso(now - 86400)}, "status": {"containerStatuses": [
+            {"name": "api", "ready": True, "restartCount": 2, "state": {"running": {"startedAt": iso(crashed_at)}},
+             "lastState": {"terminated": {"reason": "Error", "finishedAt": iso(crashed_at)}}}]}}
+    assert infra.pod_problems(json.dumps({"items": [pod(now - 80000)]}), since=now - 60)[0] == []
+    assert infra.pod_problems(json.dumps({"items": [pod(now - 10)]}), since=now - 60)[0]  # crashed after the deploy
+    crashing = pod(now - 80000)
+    crashing["status"]["containerStatuses"][0]["state"] = {"waiting": {"reason": "CrashLoopBackOff"}}
+    assert infra.pod_problems(json.dumps({"items": [crashing]}), since=now - 60)[0]  # crashing right now

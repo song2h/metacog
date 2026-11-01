@@ -235,7 +235,7 @@ def test_old_restarts_of_untouched_pods_do_not_count():
         {"name": "db", "ready": True, "restartCount": 4, "state": {"running": {}}}]}}
     new = {"metadata": {"name": "api-2", "creationTimestamp": "2026-10-31T12:00:00Z"}, "status": {"containerStatuses": [
         {"name": "api", "ready": True, "restartCount": 0, "state": {"running": {}}}]}}
-    since = infra._created(new) - 60
+    since = infra._ts(new["metadata"]["creationTimestamp"]) - 60
     assert infra.pod_problems(json.dumps({"items": [old, new]}), since)[0] == []
     assert infra.pod_problems(json.dumps({"items": [old, new]}))[0]  # without a change time, every pod counts
 
@@ -262,7 +262,7 @@ def test_recheck_namespace_unknown_looks_at_new_pods_everywhere(tmp_path):
     assert infra.targets([{"kind": "shell", "command": "kubectl --context k -n=prod rollout restart deploy/a"}], CFG) == {("k", "prod")}
     old = {"metadata": {"name": "db-0", "creationTimestamp": "2026-10-01T00:00:00Z"}, "status": {"containerStatuses": [
         {"name": "db", "ready": True, "restartCount": 4, "state": {"running": {}}}]}}
-    assert infra.pod_problems(json.dumps({"items": [old]}), since=infra._created(old) + 1, only_new=True) == ([], [])
+    assert infra.pod_problems(json.dumps({"items": [old]}), since=infra._ts(old["metadata"]["creationTimestamp"]) + 1, only_new=True) == ([], [])
 
 
 def test_self_printed_output_and_changes_after_feedback_are_marked():
