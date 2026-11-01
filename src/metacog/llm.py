@@ -7,8 +7,6 @@ import urllib.request
 
 from metacog import store
 
-BASE_URL = os.environ.get("METACOG_BASE_URL", "https://api.meta.ai/v1")
-
 
 def api_key() -> str | None:
     store.load_env()
@@ -26,7 +24,8 @@ def chat_json(model: str, system: str, user: str, schema: dict, timeout: float =
         "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
         "response_format": {"type": "json_schema", "json_schema": {"name": schema.get("title", "result"), "schema": schema}},
     }
-    req = urllib.request.Request(f"{BASE_URL}/chat/completions", data=json.dumps(body).encode(),
+    base_url = os.environ.get("METACOG_BASE_URL", "https://api.meta.ai/v1")  # after api_key(), which loads ~/.config/metacog/.env
+    req = urllib.request.Request(f"{base_url}/chat/completions", data=json.dumps(body).encode(),
                                  headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:

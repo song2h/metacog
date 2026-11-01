@@ -7,7 +7,7 @@ import time
 
 import pytest
 
-from metacog import cli, egress, guard, hook, infra, store, verify
+from metacog import cli, egress, guard, hook, infra, llm, store, verify
 
 CFG = store.DEFAULT_CONFIG
 
@@ -196,3 +196,18 @@ def test_a_restart_before_the_deploy_does_not_make_an_untouched_pod_unhealthy():
     crashing = pod(now - 80000)
     crashing["status"]["containerStatuses"][0]["state"] = {"waiting": {"reason": "CrashLoopBackOff"}}
     assert infra.pod_problems(json.dumps({"items": [crashing]}), since=now - 60)[0]  # crashing right now
+
+
+def test_base_url_from_the_env_file_is_used(monkeypatch):
+    store.ENV_FILE.write_text("MODEL_API_KEY=dummy\nMETACOG_BASE_URL=http://127.0.0.1:9/v1\n")
+    monkeypatch.delenv("METACOG_BASE_URL", raising=False)
+    monkeypatch.setattr(os, "environ", dict(os.environ))  # load_env writes into it; restored after the test
+    called = {}
+
+    def fake_urlopen(req, timeout=None):
+        called["url"] = req.full_url
+        raise OSError("stop")
+    monkeypatch.setattr(llm.urllib.request, "urlopen", fake_urlopen)
+    with pytest.raises(OSError):
+        llm.chat_json("m", "s", "u", {})
+    assert called["url"] == "http://127.0.0.1:9/v1/chat/completions"
