@@ -36,6 +36,8 @@ HTTP_CLIS = {"curl", "wget", "http", "https", "httpie", "xh"}
 HTTP_VALUE_OPTS = {"-T", "-o", "-D", "-e", "--upload-file", "--output", "--output-document", "--output-file", "--dump-header", "--referer",
                    "--cookie", "--cookie-jar", "--config", "--cert", "--key", "--cacert", "--data", "--data-raw", "--data-binary",
                    "--post-file", "--body-file", "--proxy", "--resolve", "--input-file", "--session"}
+LOCAL_HOST = re.compile(r"localhost|[\w.-]+\.localhost|127(?:\.\d{1,3}){3}|0\.0\.0\.0|\[?::1\]?")
+RAW_NET = re.compile(r"\b(scp|sftp|rsync|nc|ncat|netcat|socat|telnet|ftp)\b|/dev/tcp/")
 ENCODE = re.compile(r"\b(base64|xxd|gzip|tar\s+-?c|zip|openssl\s+enc)\b")
 SUPERVISOR_FILES = re.compile(r"\.claude/settings(\.local)?\.json|\.claude/plugins/|\.muse/hooks\.json|\.config/muse/settings\.json|"
                               r"\.codex/(hooks\.json|config\.toml)|\.metacog/|\.config/metacog/")
@@ -92,6 +94,15 @@ def _bare_hosts(cmd: str) -> list[str]:
 def allowed(host: str, allow: list[str]) -> bool:
     host = host.rstrip(".")  # evil.com. is evil.com
     return any(host == a or host.endswith("." + a) for a in allow)
+
+
+def _leaves_machine(text: str, found: list[str], source: str) -> bool:
+    """Whether an upload can go off this machine: a non-local destination, or one metacog cannot see."""
+    dests = found + geo.IP_LITERAL.findall(text)
+    if dests:
+        return not all(LOCAL_HOST.fullmatch(h) for h in dests)
+    # No destination in sight: a relative URL stays local, a raw-socket tool or a $VAR destination may not.
+    return bool(RAW_NET.search(text) or (source == "command" and "$" in text))
 
 
 def read_secrets_before(history: list[dict]) -> list[str]:
@@ -170,7 +181,7 @@ def _upload_decision(text: str, history: list[dict], cfg: dict, source: str) -> 
         return None
     secret = bool(SECRET_PATHS.search(text))
     found = hosts(text)
-    outside = [h for h in found if not allowed(h, cfg["allow_hosts"])]
+    outside = [h for h in found if not allowed(h, cfg["allow_hosts"]) and not LOCAL_HOST.fullmatch(h)]
     blocked = [h for h in found if allowed(h, cfg.get("block_hosts", []))]
     if blocked:
         return {"decision": "deny", "rule": "blocked-host", "reason": f"{source} contacts blocked host {', '.join(blocked)}", "hosts": blocked}
@@ -178,8 +189,8 @@ def _upload_decision(text: str, history: list[dict], cfg: dict, source: str) -> 
         return {"decision": "deny", "rule": "exfiltration", "reason": f"{source} sends secret material (keys, credentials, env) over the network"}
     if UPLOAD.search(text):
         earlier = read_secrets_before(history)
-        # After a secret read, any upload is suspect: allow-listed hosts (gists, pastes, buckets) carry data too.
-        if earlier or (outside and ENCODE.search(text)):
+        # After a secret read, any upload off the machine is suspect: allow-listed hosts (gists, pastes, buckets) carry data too.
+        if (earlier and _leaves_machine(text, found, source)) or (outside and ENCODE.search(text)):
             why = f"after reading {earlier[-1]}" if earlier else "with an encoded payload"
             return {"decision": "deny", "rule": "exfiltration", "reason": f"{source} uploads data to {', '.join(found) or 'a remote host'} {why}", "hosts": found}
         if outside:
